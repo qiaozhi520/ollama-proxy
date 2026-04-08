@@ -1,0 +1,240 @@
+# ============================================================
+#  模型配置文件
+#  ============================================================
+#  本文件定义所有可用模型，每个模型包含：
+#    - name        : 模型唯一标识（格式：provider/model-name）
+#    - display_name: 显示名称
+#    - provider    : 后端提供商（openai | anthropic | gemini | deepseek 等）
+#    - endpoint    : API 端点（留空则使用默认值）
+#    - api_key     : API Key（支持环境变量占位符 ${ENV_VAR}）
+#    - model_id    : 后端模型 ID（可能与 name 不同）
+#    - context_length: 上下文窗口大小
+#    - supports_tools: 是否支持工具调用（function calling）
+#    - supports_vision: 是否支持多模态（图像输入）
+#    - supports_streaming: 是否支持流式输出
+#    - default_max_tokens: 默认最大 Token 数
+#    - enabled: 是否启用
+# ============================================================
+
+models:
+  # ── OpenAI 系列 ──────────────────────────────────────────
+
+  - name: "openai/gpt-4o"
+    display_name: "GPT-4o"
+    provider: "openai"
+    endpoint: ""           # 默认 https://api.openai.com/v1
+    api_key: "${OPENAI_API_KEY}"
+    model_id: "gpt-4o"
+    context_length: 128000
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 4096
+    enabled: true
+
+  - name: "openai/gpt-4o-mini"
+    display_name: "GPT-4o Mini"
+    provider: "openai"
+    endpoint: ""
+    api_key: "${OPENAI_API_KEY}"
+    model_id: "gpt-4o-mini"
+    context_length: 128000
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 16384
+    enabled: true
+
+  - name: "openai/gpt-4-turbo"
+    display_name: "GPT-4 Turbo"
+    provider: "openai"
+    endpoint: ""
+    api_key: "${OPENAI_API_KEY}"
+    model_id: "gpt-4-turbo"
+    context_length: 128000
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 4096
+    enabled: true
+
+  # ── Anthropic 系列 ───────────────────────────────────────
+
+  - name: "anthropic/claude-sonnet-4-20250514"
+    display_name: "Claude Sonnet 4"
+    provider: "anthropic"
+    endpoint: ""           # 默认 https://api.anthropic.com/v1
+    api_key: "${ANTHROPIC_API_KEY}"
+    model_id: "claude-sonnet-4-20250514"
+    context_length: 200000
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 4096
+    enabled: true
+
+  - name: "anthropic/claude-3-5-sonnet-20241022"
+    display_name: "Claude 3.5 Sonnet"
+    provider: "anthropic"
+    endpoint: ""
+    api_key: "${ANTHROPIC_API_KEY}"
+    model_id: "claude-3-5-sonnet-20241022"
+    context_length: 200000
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "anthropic/claude-3-5-haiku-20241022"
+    display_name: "Claude 3.5 Haiku"
+    provider: "anthropic"
+    endpoint: ""
+    api_key: "${ANTHROPIC_API_KEY}"
+    model_id: "claude-3-5-haiku-20241022"
+    context_length: 200000
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  # ── DeepSeek 系列 ────────────────────────────────────────
+
+  - name: "deepseek/deepseek-chat-v3-250312"
+    display_name: "DeepSeek V3"
+    provider: "deepseek"
+    endpoint: ""           # 默认 https://api.deepseek.com/v1
+    api_key: "${DEEPSEEK_API_KEY}"
+    model_id: "deepseek-chat-v3-250312"
+    context_length: 64000
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "deepseek/deepseek-coder-v2-250312"
+    display_name: "DeepSeek Coder V2"
+    provider: "deepseek"
+    endpoint: ""
+    api_key: "${DEEPSEEK_API_KEY}"
+    model_id: "deepseek-coder-v2-250312"
+    context_length: 64000
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  # ── Google Gemini 系列 ───────────────────────────────────
+
+  - name: "google/gemini-2.5-pro-preview-03-25"
+    display_name: "Gemini 2.5 Pro"
+    provider: "gemini"
+    endpoint: ""           # 默认 https://generativelanguage.googleapis.com/v1beta
+    api_key: "${GEMINI_API_KEY}"
+    model_id: "gemini-2.5-pro-preview-03-25"
+    context_length: 1048576
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "google/gemini-2.0-flash"
+    display_name: "Gemini 2.0 Flash"
+    provider: "gemini"
+    endpoint: ""
+    api_key: "${GEMINI_API_KEY}"
+    model_id: "gemini-2.0-flash"
+    context_length: 1048576
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  # ── Groq 系列 ────────────────────────────────────────────
+
+  - name: "groq/llama-3.3-70b-versatile"
+    display_name: "Llama 3.3 70B (Groq)"
+    provider: "groq"
+    endpoint: ""           # 默认 https://api.groq.com/openai/v1
+    api_key: "${GROQ_API_KEY}"
+    model_id: "llama-3.3-70b-versatile"
+    context_length: 128000
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "groq/mixtral-8x7b-32768"
+    display_name: "Mixtral 8x7B (Groq)"
+    provider: "groq"
+    endpoint: ""
+    api_key: "${GROQ_API_KEY}"
+    model_id: "mixtral-8x7b-32768"
+    context_length: 32768
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 4096
+    enabled: true
+
+  # ── Silicon Flow 系列 ───────────────────────────────────
+
+  - name: "silicon/qwen2.5-72b-instruct"
+    display_name: "Qwen2.5 72B (Silicon)"
+    provider: "silicon"
+    endpoint: ""           # 默认 https://api.siliconflow.cn/v1
+    api_key: "${SILICON_API_KEY}"
+    model_id: "Qwen2.5-72B-Instruct"
+    context_length: 32000
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "silicon/deepseek-v3-250312"
+    display_name: "DeepSeek V3 (Silicon)"
+    provider: "silicon"
+    endpoint: ""
+    api_key: "${SILICON_API_KEY}"
+    model_id: "deepseek-ai/DeepSeek-V3-0324"
+    context_length: 64000
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  # ── Together AI 系列 ─────────────────────────────────────
+
+  - name: "together/llama-4-maverick"
+    display_name: "Llama 4 Maverick (Together)"
+    provider: "together"
+    endpoint: ""           # 默认 https://api.together.xyz/v1
+    api_key: "${TOGETHER_API_KEY}"
+    model_id: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+    context_length: 131072
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 16384
+    enabled: true
+
+  - name: "together/qwen2.5-72b"
+    display_name: "Qwen2.5 72B (Together)"
+    provider: "together"
+    endpoint: ""
+    api_key: "${TOGETHER_API_KEY}"
+    model_id: "Qwen/Qwen2.5-72B-Instruct-Turbo"
+    context_length: 32000
+    supports_tools: true
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
