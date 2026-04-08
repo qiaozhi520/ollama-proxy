@@ -1,28 +1,15 @@
-'use strict';
-
-require('dotenv').config();
-const express  = require('express');
-const cors     = require('cors');
-const http     = require('http');
-const path     = require('path');
-
-const log      = require('./utils/logger');
-const registry = require('./models/registry');
+import 'dotenv/config';
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import http from 'http';
+import { log } from './utils/logger';
+import { registry } from './models/registry';
 
 // ── 路由 ─────────────────────────────────────────────────────
-const apiRoute       = require('./routes/api');
-const chatRoute      = require('./routes/chat');
-const tagsRoute      = require('./routes/tags');
-const showRoute      = require('./routes/show');
-const embeddingsRoute = require('./routes/embeddings');
-const createRoute    = require('./routes/create');
-const copyRoute      = require('./routes/copy');
-const deleteRoute    = require('./routes/delete');
-const psRoute        = require('./routes/ps');
-const pullRoute      = require('./routes/pull');
-const pushRoute      = require('./routes/push');
-const versionRoute   = require('./routes/version');
-const blobsRoute     = require('./routes/blobs');
+import apiRoute  from './routes/api';
+import chatRoute from './routes/chat';
+import tagsRoute from './routes/tags';
+import showRoute from './routes/show';
 
 // ── 应用 ─────────────────────────────────────────────────────
 const app = express();
@@ -32,27 +19,27 @@ const PORT = parseInt(process.env.PORT || '11434', 10);
 app.set('json spaces', 2);
 
 if (process.env.CORS_ENABLED !== 'false') {
-  app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'HEAD', 'OPTIONS'], allowedHeaders: ['*'] }));
+  app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['*'] }));
 }
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ── 请求日志 ─────────────────────────────────────────────────
-app.use((req, _res, next) => {
+app.use((req: Request, _res: Response, next: NextFunction) => {
   log.debug(`${req.method} ${req.path}`);
   next();
 });
 
 // ─────────────────────────────────────────────────────────────
-//  Ollama 兼容路由 - 完整 API
+//  Ollama 兼容路由
 // ─────────────────────────────────────────────────────────────
 
 // GET /                           — 服务信息
-app.get('/', (_req, res) => {
+app.get('/', (_req: Request, res: Response) => {
   res.json({
     status:  'ok',
-    version: '0.1.48',
+    version: '1.0.0',
     name:    'ollama-proxy',
     models:  registry.list().length,
   });
@@ -61,41 +48,14 @@ app.get('/', (_req, res) => {
 // GET /api/tags                   — 列出所有模型
 app.use('/api/tags', tagsRoute);
 
-// POST /api/show                  — 查看模型详情
+// GET /api/show                   — 查看模型详情
 app.use('/api/show', showRoute);
 
 // POST /api/chat                  — 对话（流式/非流式）
 app.use('/api/chat', chatRoute);
 
-// POST /api/generate              — 文本生成
+// POST /api/generate              — 非流式生成
 app.use('/api/generate', apiRoute);
-
-// POST /api/embeddings            — 生成嵌入向量
-app.use('/api/embeddings', embeddingsRoute);
-
-// POST /api/create                — 创建模型
-app.use('/api/create', createRoute);
-
-// POST /api/copy                  — 复制模型
-app.use('/api/copy', copyRoute);
-
-// DELETE /api/delete              — 删除模型
-app.use('/api/delete', deleteRoute);
-
-// GET /api/ps                     — 列出运行中的模型
-app.use('/api/ps', psRoute);
-
-// POST /api/pull                  — 拉取模型
-app.use('/api/pull', pullRoute);
-
-// POST /api/push                  — 推送模型
-app.use('/api/push', pushRoute);
-
-// GET /api/version                — 版本信息
-app.use('/api/version', versionRoute);
-
-// Blob 存储 API
-app.use('/api/blobs', blobsRoute);
 
 // ─────────────────────────────────────────────────────────────
 //  OpenAI 兼容路由（/v1/*）
@@ -105,19 +65,19 @@ app.use('/api/blobs', blobsRoute);
 app.use('/v1/chat', chatRoute);
 
 // POST /v1/completions            — 文本补全（降级到 /chat）
-app.post('/v1/completions', (req, res) => {
-  const { prompt, model, stream, temperature, max_tokens, options } = req.body;
+app.post('/v1/completions', (req: Request, res: Response) => {
+  const { prompt, _model, stream, temperature, max_tokens, options } = req.body as Record<string, unknown>;
   if (prompt) {
     req.body.messages = [{ role: 'user', content: prompt }];
   }
   req.body.stream = stream !== undefined ? stream : true;
-  if (temperature) req.body.options = { ...req.body.options, temperature };
-  if (max_tokens)  req.body.options = { ...req.body.options, num_predict: max_tokens };
-  chatRoute(req, res);
+  if (temperature) req.body.options = { ...(options as Record<string, unknown>), temperature };
+  if (max_tokens)  req.body.options = { ...(options as Record<string, unknown>), num_predict: max_tokens };
+  (chatRoute as unknown)(req, res);
 });
 
 // GET  /v1/models                 — 模型列表（OpenAI 风格）
-app.get('/v1/models', (_req, res) => {
+app.get('/v1/models', (_req: Request, res: Response) => {
   const models = registry.list().map(m => ({
     id:      m.name,
     object:  'model',
@@ -128,29 +88,21 @@ app.get('/v1/models', (_req, res) => {
   res.json({ object: 'list', data: models });
 });
 
-// POST /v1/embeddings             — OpenAI 风格 embedding
-app.post('/v1/embeddings', (req, res) => {
-  // 转换为 Ollama 格式并转发
-  const { input, model } = req.body;
-  req.body.prompt = input;
-  embeddingsRoute(req, res);
-});
-
 // ─────────────────────────────────────────────────────────────
 //  健康检查
 // ─────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'healthy', uptime: process.uptime() });
 });
 
 // ─────────────────────────────────────────────────────────────
 //  404 / 错误处理
 // ─────────────────────────────────────────────────────────────
-app.use((_req, res) => {
+app.use((_req: Request, res: Response) => {
   res.status(404).json({ error: `Route not found: ${_req.method} ${_req.path}` });
 });
 
-app.use((err, _req, res, _next) => {
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   log.error('Unhandled error:', err.message);
   res.status(500).json({ error: err.message });
 });
@@ -162,27 +114,9 @@ server.listen(PORT, () => {
   log.info(`  本地地址:  http://localhost:${PORT}`);
   log.info(`  模型数量:  ${registry.list().length}`);
   log.info('');
-  log.info('Ollama API 端点:');
-  log.info('  GET  /                     - 服务信息');
-  log.info('  GET  /api/tags             - 模型列表');
-  log.info('  POST /api/show             - 模型详情');
-  log.info('  POST /api/chat             - 对话生成');
-  log.info('  POST /api/generate         - 文本生成');
-  log.info('  POST /api/embeddings       - 向量嵌入');
-  log.info('  POST /api/create           - 创建模型');
-  log.info('  POST /api/copy             - 复制模型');
-  log.info('  DELETE /api/delete         - 删除模型');
-  log.info('  GET  /api/ps               - 运行中的模型');
-  log.info('  POST /api/pull             - 拉取模型');
-  log.info('  POST /api/push             - 推送模型');
-  log.info('  GET  /api/version          - 版本信息');
-  log.info('  *    /api/blobs/:digest    - Blob 存储');
-  log.info('');
-  log.info('OpenAI 兼容端点:');
-  log.info('  POST /v1/chat/completions  - 对话');
-  log.info('  POST /v1/completions       - 补全');
-  log.info('  POST /v1/embeddings        - 向量嵌入');
-  log.info('  GET  /v1/models            - 模型列表');
+  log.info('支持的 API 端点:');
+  log.info('  Ollama 风格:  /api/chat  /api/generate  /api/tags  /api/show');
+  log.info('  OpenAI 风格:  /v1/chat/completions  /v1/models');
   log.info('');
   log.info('配置模型文件:  config/models.yaml');
 });

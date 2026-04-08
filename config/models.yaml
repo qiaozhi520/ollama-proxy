@@ -238,3 +238,61 @@ models:
     supports_streaming: true
     default_max_tokens: 8192
     enabled: true
+
+  # ── Embedding 模型 ────────────────────────────────────────
+
+  - name: "openai/text-embedding-3-small"
+    display_name: "Text Embedding 3 Small"
+    provider: "openai"
+    endpoint: ""
+    api_key: "${OPENAI_API_KEY}"
+    model_id: "text-embedding-3-small"
+    context_length: 8191
+    supports_tools: false
+    supports_vision: false
+    supports_streaming: false
+    capabilities: ["embedding"]
+    embedding_dimension: 1536
+    enabled: true
+
+  - name: "openai/text-embedding-3-large"
+    display_name: "Text Embedding 3 Large"
+    provider: "openai"
+    endpoint: ""
+    api_key: "${OPENAI_API_KEY}"
+    model_id: "text-embedding-3-large"
+    context_length: 8191
+    supports_tools: false
+    supports_vision: false
+    supports_streaming: false
+    capabilities: ["embedding"]
+    embedding_dimension: 3072
+    enabled: true
+
+  - name: "silicon/bge-m3"
+    display_name: "BGE M3 (Silicon)"
+    provider: "silicon"
+    endpoint: ""
+    api_key: "${SILICON_API_KEY}"
+    model_id: "BAAI/bge-m3"
+    context_length: 8192
+    supports_tools: false
+    supports_vision: false
+    supports_streaming: false
+    capabilities: ["embedding"]
+    embedding_dimension: 1024
+    enabled: true
+
+  - name: "silicon/nomic-embed-text"
+    display_name: "Nomic Embed Text (Silicon)"
+    provider: "silicon"
+    endpoint: ""
+    api_key: "${SILICON_API_KEY}"
+    model_id: "nomic-ai/nomic-embed-text-v1.5"
+    context_length: 8192
+    supports_tools: false
+    supports_vision: false
+    supports_streaming: false
+    capabilities: ["embedding"]
+    embedding_dimension: 768
+    enabled: true

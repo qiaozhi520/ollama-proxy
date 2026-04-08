@@ -8,15 +8,27 @@
     "dev": "node --watch src/index.js",
     "test": "node --test"
   },
-  "keywords": ["ollama", "proxy", "llm", "openai"],
+  "keywords": [
+    "ollama",
+    "proxy",
+    "llm",
+    "openai"
+  ],
   "author": "qiaozhi",
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "uuid": "^10.0.0",
     "yaml": "^2.4.2",
-    "zod": "^3.23.8",
-    "uuid": "^10.0.0"
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.2",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^6.0.2"
   }
 }

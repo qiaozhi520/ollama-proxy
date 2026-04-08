@@ -1,103 +1,114 @@
 'use strict';
 
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
-const YAML = require('yaml');
-const { z } = require('zod');
+const yaml = require('yaml');
 
-// ── Zod Schema ────────────────────────────────────────────────
-const ModelSchema = z.object({
-  name:            z.string().min(1),
-  display_name:    z.string().optional(),
-  provider:        z.string().min(1),
-  endpoint:        z.string().optional().default(''),
-  api_key:         z.string().optional().default(''),
-  model_id:        z.string().optional(),
-  context_length:  z.number().optional().default(4096),
-  supports_tools:  z.boolean().optional().default(false),
-  supports_vision: z.boolean().optional().default(false),
-  supports_streaming: z.boolean().optional().default(true),
-  default_max_tokens: z.number().optional().default(4096),
-  enabled:         z.boolean().optional().default(true),
-});
+let _models = [];
+let _config = null;
 
-// ── Model Registry ────────────────────────────────────────────
-class ModelRegistry {
-  constructor() {
-    this._models = [];
-    this._index = new Map();
-    this._load();
-  }
-
-  /** 从 YAML 文件加载模型配置 */
-  _load() {
-    const configPath = path.resolve(__dirname, '../../config/models.yaml');
-    if (!fs.existsSync(configPath)) {
-      console.warn(`[registry] models.yaml not found at ${configPath}`);
-      return;
+// 解析环境变量占位符 ${VAR_NAME}
+function resolveEnv(str) {
+  if (typeof str !== 'string') return str;
+  return str.replace(/\$\{([^}]+)\}/g, (_, name) => {
+    const val = process.env[name];
+    if (val === undefined) {
+      console.warn(`[registry] 警告: 环境变量 ${name} 未定义`);
+      return '';
     }
-
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const parsed = YAML.parse(raw);
-
-    if (!Array.isArray(parsed.models)) {
-      throw new Error('config/models.yaml must have a top-level "models" array');
-    }
-
-    this._models = parsed.models
-      .map((m, i) => {
-        try {
-          return ModelSchema.parse(m);
-        } catch (err) {
-          console.warn(`[registry] model #${i + 1} skipped due to validation error:`, err.message);
-          return null;
-        }
-      })
-      .filter(Boolean);
-
-    // 构建索引（支持模糊匹配：完整名称 / provider/model-id / model-id）
-    this._buildIndex();
-
-    console.log(`[registry] loaded ${this._models.length} models`);
-  }
-
-  _buildIndex() {
-    this._index.clear();
-    for (const model of this._models) {
-      if (!model.enabled) continue;
-      // 主键：完整名称
-      this._index.set(model.name, model);
-      // 兼容：仅 model_id
-      if (model.model_id && model.model_id !== model.name) {
-        this._index.set(model.model_id, model);
-      }
-    }
-  }
-
-  /** 根据名称查找模型 */
-  get(name) {
-    return this._index.get(name) || null;
-  }
-
-  /** 返回所有已启用模型 */
-  list() {
-    return this._models.filter(m => m.enabled);
-  }
-
-  /** 解析 ${ENV_VAR} 占位符为实际值 */
-  resolveApiKey(raw) {
-    if (!raw) return '';
-    return raw.replace(/\$\{(\w+)\}/g, (_, varName) => process.env[varName] || '');
-  }
-
-  /** 替换配置中的环境变量占位符 */
-  resolveConfig(model) {
-    return {
-      ...model,
-      api_key:  this.resolveApiKey(model.api_key),
-      endpoint: this.resolveApiKey(model.endpoint),
-    };
-  }
+    return val;
+  });
 }
 
-module.exports = new ModelRegistry();
+// 递归解析对象中的所有占位符
+function resolveConfig(obj) {
+  if (typeof obj === 'string') return resolveEnv(obj);
+  if (Array.isArray(obj)) return obj.map(resolveConfig);
+  if (obj && typeof obj === 'object') {
+    const resolved = {};
+    for (const [k, v] of Object.entries(obj)) {
+      resolved[k] = resolveConfig(v);
+    }
+    return resolved;
+  }
+  return obj;
+}
+
+// 加载 YAML 配置
+function loadConfig() {
+  const configPath = path.resolve(__dirname, '../../config/models.yaml');
+  if (!fs.existsSync(configPath)) {
+    console.warn('[registry] 配置文件不存在:', configPath);
+    return [];
+  }
+
+  const raw = fs.readFileSync(configPath, 'utf-8');
+  _config = yaml.parse(raw);
+  
+  if (!_config || !_config.models) {
+    console.warn('[registry] 配置文件格式错误或无模型');
+    return [];
+  }
+
+  _models = _config.models.map(m => ({
+    name: m.name,
+    provider: m.provider || 'openai',
+    ...m
+  }));
+
+  console.log(`[registry] 已加载 ${_models.length} 个模型`);
+  return _models;
+}
+
+// 获取模型（支持别名查找）
+function get(name) {
+  // 精确匹配
+  let model = _models.find(m => m.name === name);
+  if (model) return model;
+
+  // 无前缀匹配 (去掉 provider/ 前缀)
+  model = _models.find(m => m.name.endsWith('/' + name));
+  if (model) return model;
+
+  // 别名匹配
+  model = _models.find(m => m.aliases && m.aliases.includes(name));
+  if (model) return model;
+
+  return null;
+}
+
+// 列出所有模型
+function list() {
+  return _models.map(m => {
+    const cfg = resolveConfig(m);
+    return {
+      name: m.name,
+      modified_at: new Date().toISOString(),
+      size: cfg.size || 0,
+      digest: (cfg.api_key || '').slice(0, 12) || 'proxy',
+      details: {
+        parent_model: '',
+        format: 'proxy',
+        family: m.provider,
+        parameter_size: cfg.parameter_size || '',
+        quantization_level: cfg.quantization || ''
+      }
+    };
+  });
+}
+
+// 获取模型的完整配置（解析环境变量）
+function resolve(model) {
+  return resolveConfig(model);
+}
+
+// 初始化
+loadConfig();
+
+module.exports = {
+  load: loadConfig,
+  get,
+  list,
+  resolve,
+  resolveConfig
+};
