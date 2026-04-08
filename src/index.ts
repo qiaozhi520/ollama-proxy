@@ -73,7 +73,7 @@ app.post('/v1/completions', (req: Request, res: Response) => {
   req.body.stream = stream !== undefined ? stream : true;
   if (temperature) req.body.options = { ...(options as Record<string, unknown>), temperature };
   if (max_tokens)  req.body.options = { ...(options as Record<string, unknown>), num_predict: max_tokens };
-  (chatRoute as unknown)(req, res);
+  (chatRoute as any)(req, res);
 });
 
 // GET  /v1/models                 — 模型列表（OpenAI 风格）
