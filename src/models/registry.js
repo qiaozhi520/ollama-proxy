@@ -62,9 +62,18 @@ function loadConfig() {
       name: m.name,
       provider: m.provider || 'openai',
       ...m,
-    }));
+    }))
+    .filter(m => {
+      // 检查 API key 是否可用（解析环境变量后非空）
+      const apiKey = resolveEnv(m.api_key);
+      if (!apiKey) {
+        logger.debug(`跳过 ${m.name}: ${m.api_key} 对应的 key 为空`);
+        return false;
+      }
+      return true;
+    });
 
-  logger.info(`已加载 ${_models.length} 个模型 (${t.elapsed().toFixed(1)}ms)`);
+  logger.info(`已加载 ${_models.length} 个模型 (共 ${config.models.filter(m => m.enabled !== false).length} 个已启用, ${_models.length} 个有 key) [${t.elapsed().toFixed(1)}ms]`);
   return _models;
 }
 
