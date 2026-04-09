@@ -10,6 +10,7 @@
 
 const log = require('../../utils/logger');
 const logger = log.child('adapter');
+const { StreamingThinkingProcessor } = require('../../utils/thinking');
 
 // ── Provider 端点 ─────────────────────────────────────────────
 const ENDPOINTS = {
@@ -23,7 +24,109 @@ const ENDPOINTS = {
   together:  'https://api.together.xyz/v1',
 };
 
+// ── MiniMax 流式思考处理器状态 ─────────────────────────────────
+// 每个 MiniMax 模型一个处理器实例（用于流式响应）
+const minimaxProcessors = new Map();
+
+function getMiniMaxProcessor(modelName) {
+  if (!minimaxProcessors.has(modelName)) {
+    minimaxProcessors.set(modelName, new StreamingThinkingProcessor());
+  }
+  return minimaxProcessors.get(modelName);
+}
+
 // ── 工具函数 ─────────────────────────────────────────────────
+
+/**
+ * 从 MiniMax 响应中提取思考内容
+ * MiniMax 会把思考内容放在 <thinkLalala...ContentLoaded...Lalala...ContentLoaded</thinkLalala...ContentLoaded 标签中
+ */
+function extractMiniMaxThinking(content) {
+  if (!content) return { content: '', thinking: '' };
+  
+  // 使用正则匹配 <thinkLalala...ContentLoaded...Lalala...ContentLoaded</thinkLalala...ContentLoaded 标签
+  const thinkRegex = /<thinkLalala...ContentLoaded([\s\S]*?)<\/thinkLalala...ContentLoaded/g;
+  const match = thinkRegex.exec(content);
+  
+  if (match) {
+    const thinking = match[1].trim();
+    // 移除 think 标签及其内容
+    const cleanContent = content.replace(thinkRegex, '').trim();
+    return { content: cleanContent, thinking };
+  }
+  
+  return { content, thinking: '' };
+}
+
+/**
+ * MiniMax 流式思考处理器
+ * 用于处理流式响应中跨 chunk 的 <thinkLalala...ContentLoaded 标签
+ */
+class MiniMaxThinkingProcessor {
+  constructor() {
+    this.buffer = '';
+    this.inThinking = false;
+    this.thinkingContent = '';
+    this.outputContent = '';
+  }
+
+  process(chunk) {
+    this.buffer += chunk;
+    const results = [];
+    
+    while (this.buffer.length > 0) {
+      if (this.inThinking) {
+        // 在思考标签内，查找结束标签
+        const endIdx = this.buffer.indexOf('</thinkLalala...ContentLoaded');
+        if (endIdx !== -1) {
+          // 找到结束标签
+          this.thinkingContent += this.buffer.substring(0, endIdx);
+          this.buffer = this.buffer.substring(endIdx + 8); // 跳过 </thinkLalala...ContentLoaded
+          this.inThinking = false;
+          results.push({ type: 'thinking', content: this.thinkingContent });
+          this.thinkingContent = '';
+        } else {
+          // 没找到结束标签，继续缓冲
+          break;
+        }
+      } else {
+        // 不在思考标签内，查找开始标签
+        const startIdx = this.buffer.indexOf('<thinkLalala...ContentLoaded');
+        if (startIdx !== -1) {
+          // 找到开始标签，输出之前的内容
+          if (startIdx > 0) {
+            const content = this.buffer.substring(0, startIdx);
+            if (content) results.push({ type: 'content', content });
+          }
+          this.buffer = this.buffer.substring(startIdx + 7); // 跳过 <thinkLalala...ContentLoaded
+          this.inThinking = true;
+        } else {
+          // 没找到开始标签
+          // 保留最后几个字符以防标签被截断
+          const safeLength = Math.max(0, this.buffer.length - 7);
+          if (safeLength > 0) {
+            const content = this.buffer.substring(0, safeLength);
+            results.push({ type: 'content', content });
+            this.buffer = this.buffer.substring(safeLength);
+          }
+          break;
+        }
+      }
+    }
+    
+    return results;
+  }
+
+  flush() {
+    const results = [];
+    if (this.buffer) {
+      // 如果还有缓冲内容，全部作为普通内容输出
+      results.push({ type: 'content', content: this.buffer });
+      this.buffer = '';
+    }
+    return results;
+  }
+}
 
 function mapMessages(messages = []) {
   const normalized = [];
@@ -129,13 +232,32 @@ const openaiLike = {
 
   mapResponse(streaming, data, model) {
     if (streaming) {
+      // MiniMax: 获取或创建流式思考处理器
+      const processor = model.provider === 'minimax' ? getMiniMaxProcessor(model.name) : null;
+      
       return data.map(chunk => {
         if (!chunk.choices?.[0]) return '';
         const c = chunk.choices[0];
         const tc = c.delta?.tool_calls;
         
-        // 提取 reasoning/thinking 内容
-        const reasoningContent = c.delta?.reasoning_content || c.delta?.thinking || '';
+        let content = c.delta?.content || '';
+        let thinking = c.delta?.reasoning_content || c.delta?.thinking || '';
+        
+        // MiniMax: 使用流式思考处理器
+        if (processor && content) {
+          const processed = processor.process(content);
+          content = processed.content;
+          if (processed.thinking) thinking = processed.thinking;
+        }
+        
+        // 如果是最后一个 chunk (finish_reason 存在)，刷新处理器
+        if (processor && c.finish_reason) {
+          const flushed = processor.flush();
+          // 重置处理器以供下次使用
+          processor.reset();
+          // 注意：flushed 的内容会在下一个响应中发送
+          // 这里我们不处理 flushed 内容，因为 finish_reason 已经标记了结束
+        }
         
         const base = {
           model:   model.name,
@@ -143,13 +265,13 @@ const openaiLike = {
           done:    c.finish_reason === 'stop' || c.finish_reason === 'content_filter',
           message: {
             role:    c.delta?.role || 'assistant',
-            content: c.delta?.content || (tc ? '' : ''),
+            content: content || (tc ? '' : ''),
           },
         };
         
         // 添加 thinking/reasoning 数据（如果存在）
-        if (reasoningContent) {
-          base.thinking = reasoningContent;
+        if (thinking) {
+          base.thinking = thinking;
         }
         
         if (tc) {
@@ -174,8 +296,15 @@ const openaiLike = {
     const msg = choice.message;
     const tc  = msg?.tool_calls;
     
-    // 提取 reasoning/thinking 内容
-    const reasoningContent = msg?.reasoning_content || msg?.thinking || '';
+    let content = msg?.content || '';
+    let thinking = msg?.reasoning_content || msg?.thinking || '';
+    
+    // MiniMax: 从 content 中提取 thinking 标签内容
+    if (model.provider === 'minimax' && content) {
+      const extracted = extractMiniMaxThinking(content);
+      content = extracted.content;
+      if (extracted.thinking) thinking = extracted.thinking;
+    }
 
     const res = {
       model:        model.name,
@@ -184,15 +313,15 @@ const openaiLike = {
       done_reason:  'stop',
       message: {
         role:    msg.role || 'assistant',
-        content: msg.content || '',
+        content: content || '',
       },
       total_duration: 0,
       eval_count:     data.usage?.completion_tokens || 0,
     };
     
     // 添加 thinking/reasoning 数据（如果存在）
-    if (reasoningContent) {
-      res.thinking = reasoningContent;
+    if (thinking) {
+      res.thinking = thinking;
     }
 
     if (tc) {

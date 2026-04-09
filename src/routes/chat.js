@@ -5,7 +5,7 @@ const log = require('../utils/logger');
 const registry = require('../models/registry');
 const { getAdapter } = require('../models/adapters/adapters');
 const { stream, request } = require('../utils/net');
-const { stripThinkingMarkup, extractThinkingContent } = require('../utils/thinking');
+const { stripThinkingMarkup, extractThinkingContent, StreamingThinkingProcessor } = require('../utils/thinking');
 
 const router = express.Router();
 const logger = log.child('chat');
@@ -206,6 +206,9 @@ router.post('/', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
+    // MiniMax 需要专门的思考处理器（因为  Lalala...ContentLoaded 标签在 content 中）
+    const thinkingProcessor = cfg.provider === 'minimax' ? new StreamingThinkingProcessor() : null;
+
     try {
       const t = log.timer();
       const upstream = await stream(endpoint, cfg.api_key, cfg.provider, apiBody);
@@ -237,11 +240,27 @@ router.post('/', async (req, res) => {
           if (out) {
             if (openaiFormat) {
               for (const payload of parseSseJsonPayloads(out)) {
+                // MiniMax: 使用流式思考处理器
+                if (thinkingProcessor && payload.message?.content) {
+                  const processed = thinkingProcessor.process(payload.message.content);
+                  payload.message.content = processed.content;
+                  if (processed.thinking) {
+                    payload.thinking = processed.thinking;
+                  }
+                }
                 const openaiChunk = convertOllamaChunkToOpenAIChunk(payload, model || cfg.name);
                 res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`);
               }
             } else {
               for (const payload of parseSseJsonPayloads(out)) {
+                // MiniMax: 使用流式思考处理器
+                if (thinkingProcessor && payload.message?.content) {
+                  const processed = thinkingProcessor.process(payload.message.content);
+                  payload.message.content = processed.content;
+                  if (processed.thinking) {
+                    payload.thinking = processed.thinking;
+                  }
+                }
                 const sanitizedChunk = sanitizeOllamaResponse(payload);
                 res.write(`data: ${JSON.stringify(sanitizedChunk)}\n\n`);
               }
@@ -252,6 +271,29 @@ router.post('/', async (req, res) => {
 
       upstream.on('end', () => {
         logger.debug(`流式完成 (${t.elapsed().toFixed(0)}ms)`);
+        
+        // MiniMax: 刷新思考处理器
+        if (thinkingProcessor) {
+          const flushed = thinkingProcessor.flush();
+          if (flushed.content || flushed.thinking) {
+            const finalPayload = {
+              model: cfg.name,
+              created: Math.floor(Date.now() / 1000),
+              done: false,
+              message: { role: 'assistant', content: flushed.content },
+            };
+            if (flushed.thinking) {
+              finalPayload.thinking = flushed.thinking;
+            }
+            if (openaiFormat) {
+              const openaiChunk = convertOllamaChunkToOpenAIChunk(finalPayload, model || cfg.name);
+              res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`);
+            } else {
+              res.write(`data: ${JSON.stringify(finalPayload)}\n\n`);
+            }
+          }
+        }
+        
         if (openaiFormat) {
           const finalChunk = convertOllamaChunkToOpenAIChunk({ done: true, done_reason: 'stop' }, model || cfg.name);
           res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
