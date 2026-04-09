@@ -39,7 +39,7 @@ function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
   }
 
   // 处理 thinking/thinking_content 字段（DeepSeek 等模型）
-  // OpenAI 兼容格式：将 thinking 放入 content 的特殊标记中
+  // 直接从 chunk 中获取 thinking 数据，而不是从 message 中
   const thinkingContent = message.thinking || message.thinking_content || ollamaChunk.thinking;
   if (thinkingContent) {
     // 在 content 前面添加 thinking 标记（Claude 风格）
@@ -79,6 +79,51 @@ function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
     model: modelName,
     choices: [choice],
   };
+}
+
+// ── 处理流式 thinking 数据 ──────────────────────────────────
+// 有些模型（如 DeepSeek）在单独的 chunk 中发送 thinking 数据
+function shouldEmitThinkingChunk(ollamaChunk) {
+  // 检查是否有 thinking 数据
+  const thinking = ollamaChunk.thinking || 
+                   ollamaChunk.message?.thinking || 
+                   ollamaChunk.message?.thinking_content;
+  return !!thinking;
+}
+
+function emitThinkingChunk(ollamaChunk, modelName, res, openaiFormat) {
+  const thinkingContent = ollamaChunk.thinking || 
+                          ollamaChunk.message?.thinking || 
+                          ollamaChunk.message?.thinking_content;
+  
+  if (!thinkingContent) return;
+
+  if (openaiFormat) {
+    const thinkingOpenAIChunk = {
+      id: ollamaChunk.id || `chatcmpl-${Date.now().toString(36)}`,
+      object: 'chat.completion.chunk',
+      created: ollamaChunk.created || Math.floor(Date.now() / 1000),
+      model: modelName,
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          content: `<thinking>\n${thinkingContent}\n</thinking>\n`,
+        },
+      }],
+    };
+    res.write(`data: ${JSON.stringify(thinkingOpenAIChunk)}\n\n`);
+  } else {
+    // Ollama 格式
+    const thinkingOllamaChunk = {
+      model: modelName,
+      created_at: ollamaChunk.created_at || new Date().toISOString(),
+      done: false,
+      thinking: thinkingContent,
+      message: { role: 'assistant', content: '' },
+    };
+    res.write(`data: ${JSON.stringify(thinkingOllamaChunk)}\n\n`);
+  }
 }
 
 function convertOllamaMessageToOpenAIMessage(message = {}) {
@@ -166,6 +211,13 @@ router.post('/', async (req, res) => {
         }
 
         if (events.length > 0) {
+          // 先处理 thinking 相关的 chunk（立即发送，不等待最后）
+          for (const event of events) {
+            if (shouldEmitThinkingChunk(event)) {
+              emitThinkingChunk(event, model || cfg.name, res, openaiFormat);
+            }
+          }
+
           const out = adapter.mapResponse(true, events, cfg);
           if (out) {
             if (openaiFormat) {
