@@ -1,331 +1,297 @@
 'use strict';
 
 /**
- * 模型适配器 — 统一接口
+ * 模型适配器
  *
- * 每个适配器实现两个方法：
- *   buildRequest(ollamaBody, resolvedModel) → OpenAI-compatible body
- *   mapResponse(streaming, data, model)     → Ollama-compatible response
+ * 每个 provider 实现两个方法：
+ *   buildRequest(ollamaBody, model) → provider 请求体
+ *   mapResponse(streaming, data, model) → Ollama 响应体
  */
 
-const PROVIDERS = {
-  openai:   'https://api.openai.com/v1',
-  anthropic:'https://api.anthropic.com',
-  deepseek: 'https://api.deepseek.com/v1',
-  gemini:   'https://generativelanguage.googleapis.com/v1beta',
-  groq:     'https://api.groq.com/openai/v1',
-  silicon:  'https://api.siliconflow.cn/v1',
-  together: 'https://api.together.xyz/v1',
+const log = require('../../utils/logger');
+const logger = log.child('adapter');
+
+// ── Provider 端点 ─────────────────────────────────────────────
+const ENDPOINTS = {
+  openai:    'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com',
+  deepseek:  'https://api.deepseek.com/v1',
+  gemini:    'https://generativelanguage.googleapis.com/v1beta',
+  groq:      'https://api.groq.com/openai/v1',
+  silicon:   'https://api.siliconflow.cn/v1',
+  together:  'https://api.together.xyz/v1',
 };
 
-// ── 工具函数 ───────────────────────────────────────────────────
+// ── 工具函数 ─────────────────────────────────────────────────
 
-/** 把 Ollama message 格式转成 OpenAI messages 格式 */
-function mapMessages(messages) {
+function mapMessages(messages = []) {
   return messages.map(m => ({
-    role:    m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'user',
+    role:    m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : m.role,
     content: typeof m.content === 'string' ? m.content : '',
     ...(m.images ? { images: m.images } : {}),
   }));
 }
 
-/** 把 Ollama tools 转成 OpenAI tools */
 function mapTools(tools) {
-  if (!tools || tools.length === 0) return undefined;
+  if (!tools?.length) return undefined;
   return tools.map(t => ({
     type: 'function',
     function: {
-      name:        t.function?.name        || t.name        || '',
+      name:        t.function?.name || t.name || '',
       description: t.function?.description || t.description || '',
-      parameters:  t.function?.parameters  || t.parameters  || { type: 'object', properties: {} },
+      parameters:  t.function?.parameters || t.parameters || { type: 'object', properties: {} },
     },
   }));
 }
 
-/** 提取 stream 选项（Ollama 格式） */
-function getStream(options) {
-  if (options.stream !== undefined) return options.stream;
-  return true;
-}
-
-// ─────────────────────────────────────────────────────────────
-//  OpenAI 兼容适配器（OpenAI / DeepSeek / Groq / Silicon / Together）
-// ─────────────────────────────────────────────────────────────
-const openaiAdapter = {
+// ── OpenAI 兼容适配器 ───────────────────────────────────────
+const openaiLike = {
   getEndpoint(model) {
-    const base = model.endpoint || PROVIDERS[model.provider] || PROVIDERS.openai;
-    return model.model_id ? `${base}/chat/completions` : `${base}/chat/completions`;
+    const base = model.endpoint || ENDPOINTS[model.provider] || ENDPOINTS.openai;
+    return `${base}/chat/completions`;
   },
 
-  buildRequest(ollamaBody, resolvedModel) {
-    const messages = ollamaBody.messages || [];
-    const tools    = ollamaBody.tools;
-    const options  = ollamaBody.options  || {};
+  buildRequest(body, model) {
+    const { messages, tools, options = {} } = body;
 
     const req = {
-      model:      resolvedModel.model_id || resolvedModel.name,
-      messages:   mapMessages(messages),
-      stream:     getStream(ollamaBody),
+      model:    model.model_id || model.name,
+      messages: mapMessages(messages),
+      stream:   body.stream !== false,
     };
 
-    if (ollamaBody.stream !== false && ollamaBody.stream !== undefined) {
-      req.stream = ollamaBody.stream;
+    if (tools?.length) req.tools = mapTools(tools);
+    if (body.temperature !== undefined || options.temperature !== undefined) {
+      req.temperature = body.temperature ?? options.temperature;
     }
-
-    if (tools && tools.length > 0) req.tools = mapTools(tools);
-    if (ollamaBody.temperature !== undefined || options.temperature !== undefined)
-      req.temperature = ollamaBody.temperature ?? options.temperature;
-    if (ollamaBody.max_tokens !== undefined || options.num_predict !== undefined)
-      req.max_tokens = ollamaBody.max_tokens ?? options.num_predict;
-    if (options.top_p)     req.top_p     = options.top_p;
-    if (options.top_k)     req.top_k     = options.top_k;
+    if (body.max_tokens !== undefined || options.num_predict !== undefined) {
+      req.max_tokens = body.max_tokens ?? options.num_predict;
+    }
+    if (options.top_p)    req.top_p = options.top_p;
+    if (options.top_k)    req.top_k = options.top_k;
     if (options.frequency_penalty) req.frequency_penalty = options.frequency_penalty;
     if (options.presence_penalty)  req.presence_penalty  = options.presence_penalty;
-    if (options.stop)      req.stop     = Array.isArray(options.stop) ? options.stop : [options.stop];
+    if (options.stop)     req.stop = Array.isArray(options.stop) ? options.stop : [options.stop];
 
     return req;
   },
 
-  mapResponse(streaming, data, resolvedModel) {
+  mapResponse(streaming, data, model) {
     if (streaming) {
-      // SSE 流式响应
-      return data
-        .map(chunk => {
-          if (!chunk.choices?.[0]) return '';
-          const c = chunk.choices[0];
-          const toolCalls = c.delta?.tool_calls;
-          const base = {
-            model:     resolvedModel.name,
-            created:   chunk.created || Math.floor(Date.now() / 1000),
-            done:      false,
-            message: {
-              role:    c.delta?.role    || 'assistant',
-              content: c.delta?.content || (toolCalls ? '' : ''),
+      return data.map(chunk => {
+        if (!chunk.choices?.[0]) return '';
+        const c = chunk.choices[0];
+        const tc = c.delta?.tool_calls;
+        const base = {
+          model:   model.name,
+          created: chunk.created || Math.floor(Date.now() / 1000),
+          done:    false,
+          message: {
+            role:    c.delta?.role || 'assistant',
+            content: c.delta?.content || (tc ? '' : ''),
+          },
+        };
+        if (tc) {
+          base.message.tool_calls = tc.map((t, i) => ({
+            function: {
+              name:      t.function?.name || '',
+              arguments: typeof t.function?.arguments === 'string'
+                ? t.function.arguments
+                : JSON.stringify(t.function?.arguments || {}),
             },
-            total_duration: 0,
-            eval_count:      0,
-          };
-          if (toolCalls) {
-            base.message.tool_calls = toolCalls.map((tc, i) => ({
-              function: {
-                name:       tc.function?.name       || '',
-                arguments:  typeof tc.function?.arguments === 'string'
-                              ? tc.function.arguments
-                              : JSON.stringify(tc.function?.arguments || {}),
-              },
-              index: tc.index ?? i,
-            }));
-          }
-          return 'data: ' + JSON.stringify(base) + '\n\n';
-        })
-        .join('');
+            index: t.index ?? i,
+          }));
+        }
+        return 'data: ' + JSON.stringify(base) + '\n\n';
+      }).join('');
     }
 
     // 非流式
     const choice = data.choices?.[0];
     if (!choice) return null;
-    const msg = choice.message;
-    const toolCalls = msg?.tool_calls;
 
-    const response = {
-      model:      resolvedModel.name,
-      created:    data.created || Math.floor(Date.now() / 1000),
-      done:       true,
-      done_reason:'stop',
+    const msg = choice.message;
+    const tc  = msg?.tool_calls;
+
+    const res = {
+      model:        model.name,
+      created:      data.created || Math.floor(Date.now() / 1000),
+      done:         true,
+      done_reason:  'stop',
       message: {
         role:    msg.role || 'assistant',
         content: msg.content || '',
       },
       total_duration: 0,
-      eval_count:      data.usage?.completion_tokens || 0,
-      eval_duration:   0,
-      load_duration:   0,
+      eval_count:     data.usage?.completion_tokens || 0,
     };
 
-    if (toolCalls) {
-      response.message.tool_calls = toolCalls.map((tc, i) => ({
+    if (tc) {
+      res.message.tool_calls = tc.map((t, i) => ({
         function: {
-          name:       tc.function?.name       || '',
-          arguments:  typeof tc.function?.arguments === 'string'
-                        ? tc.function.arguments
-                        : JSON.stringify(tc.function?.arguments || {}),
+          name:      t.function?.name || '',
+          arguments: typeof t.function?.arguments === 'string'
+            ? t.function.arguments
+            : JSON.stringify(t.function?.arguments || {}),
         },
-        index: tc.index ?? i,
+        index: t.index ?? i,
       }));
     }
 
-    return response;
+    return res;
   },
 };
 
-// ─────────────────────────────────────────────────────────────
-//  Anthropic 适配器
-// ─────────────────────────────────────────────────────────────
-const anthropicAdapter = {
+// ── Anthropic 适配器 ─────────────────────────────────────────
+const anthropic = {
   getEndpoint(model) {
-    const base = model.endpoint || PROVIDERS.anthropic;
-    const version = process.env.ANTHROPIC_VERSION || '2023-06-01';
+    const base = model.endpoint || ENDPOINTS.anthropic;
     return `${base}/v1/messages`;
   },
 
-  buildRequest(ollamaBody, resolvedModel) {
-    const messages = ollamaBody.messages || [];
-    const options  = ollamaBody.options  || {};
-    const tools    = ollamaBody.tools;
+  buildRequest(body, model) {
+    const { messages = [], options = {}, tools } = body;
 
-    // Anthropic 不支持 system role in messages，同一处理
     const systemMsg = messages.find(m => m.role === 'system');
     const chatMsgs  = messages.filter(m => m.role !== 'system');
 
     const req = {
-      model:       resolvedModel.model_id || resolvedModel.name,
-      messages:    chatMsgs.map(m => ({
+      model:      model.model_id || model.name,
+      messages:   chatMsgs.map(m => ({
         role:    m.role === 'assistant' ? 'assistant' : 'user',
-        content: typeof m.content === 'string'
-                  ? m.content
-                  : m.content?.map?.(c => c.type === 'text' ? { type: 'text', text: c.text } : c) || m.content || '',
+        content: typeof m.content === 'string' ? m.content : '',
       })),
-      stream:      getStream(ollamaBody),
-      max_tokens:  ollamaBody.max_tokens || options.num_predict || resolvedModel.default_max_tokens || 4096,
+      stream:     body.stream !== false,
+      max_tokens: body.max_tokens || options.num_predict || model.default_max_tokens || 4096,
     };
 
-    if (systemMsg) req.system = typeof systemMsg.content === 'string' ? systemMsg.content : '';
+    if (systemMsg) req.system = systemMsg.content;
+    if (body.temperature !== undefined || options.temperature !== undefined) {
+      req.temperature = body.temperature ?? options.temperature;
+    }
+    if (options.top_p) req.top_p = options.top_p;
+    if (options.top_k) req.top_k = options.top_k;
 
-    if (ollamaBody.temperature !== undefined || options.temperature !== undefined)
-      req.temperature = ollamaBody.temperature ?? options.temperature;
-    if (options.top_p)      req.top_p          = options.top_p;
-    if (options.top_k)      req.top_k          = options.top_k;
-
-    if (tools && tools.length > 0) {
+    if (tools?.length) {
       req.tools = tools.map(t => ({
-        name:        t.function?.name        || t.name        || '',
-        description: t.function?.description || t.description || '',
-        input_schema: t.function?.parameters  || { type: 'object', properties: {} },
+        name:         t.function?.name || t.name || '',
+        description:  t.function?.description || t.description || '',
+        input_schema: t.function?.parameters || { type: 'object', properties: {} },
       }));
     }
 
     return req;
   },
 
-  mapResponse(streaming, data, resolvedModel) {
+  mapResponse(streaming, data, model) {
     if (streaming) {
       return data
-        .filter(d => d.type === 'content_block_start' || d.type === 'content_block_delta' || d.type === 'message_delta')
+        .filter(d => ['content_block_start', 'content_block_delta', 'message_delta'].includes(d.type))
         .map(d => {
           if (d.type === 'content_block_start') {
             const block = d.content_block || {};
             return 'data: ' + JSON.stringify({
-              model:       resolvedModel.name,
-              created:     Math.floor(Date.now() / 1000),
-              done:        false,
-              message: { role: 'assistant', content: '', tool_calls: block.type === 'tool_use' ? [{
-                function: { name: block.name || '', arguments: '' }, index: d.index || 0,
-              }] : undefined },
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    false,
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: block.type === 'tool_use' ? [{
+                  function: { name: block.name || '', arguments: '' },
+                  index: d.index || 0,
+                }] : undefined,
+              },
             }) + '\n\n';
           }
           if (d.type === 'content_block_delta') {
             const base = {
-              model:       resolvedModel.name,
-              created:     Math.floor(Date.now() / 1000),
-              done:        false,
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    false,
               message: { role: 'assistant', content: d.delta?.text || '' },
             };
             if (d.delta?.type === 'input_json_delta') {
-              const idx = d.index ?? 0;
               base.message.tool_calls = [{
-                function: { arguments: d.delta.partial_json }, index: idx,
+                function: { arguments: d.delta.partial_json },
+                index: d.index ?? 0,
               }];
               base.message.content = '';
             }
             return 'data: ' + JSON.stringify(base) + '\n\n';
           }
           return '';
-        })
-        .join('');
+        }).join('');
     }
 
-    const msg = data;
-    const content = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content || '' }];
-    const textBlock = content.find(c => c.type === 'text');
+    const content = Array.isArray(data.content) ? data.content : [{ type: 'text', text: data.content || '' }];
+    const textBlock  = content.find(c => c.type === 'text');
     const toolBlocks = content.filter(c => c.type === 'tool_use');
 
-    const response = {
-      model:      resolvedModel.name,
-      created:    Math.floor(Date.now() / 1000),
-      done:       true,
-      done_reason: msg.stop_reason || 'end_turn',
+    const res = {
+      model:        model.name,
+      created:      Math.floor(Date.now() / 1000),
+      done:         true,
+      done_reason:  data.stop_reason || 'end_turn',
       message: {
         role:    'assistant',
         content: textBlock?.text || '',
       },
       total_duration: 0,
-      eval_count:      msg.usage?.output_tokens || 0,
-      eval_duration:   0,
-      load_duration:   0,
+      eval_count:     data.usage?.output_tokens || 0,
     };
 
-    if (toolBlocks?.length > 0) {
-      response.message.tool_calls = toolBlocks.map((b, i) => ({
+    if (toolBlocks?.length) {
+      res.message.tool_calls = toolBlocks.map((b, i) => ({
         function: {
-          name:       b.name || '',
-          arguments:  typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
+          name:      b.name || '',
+          arguments: typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
         },
-        index: b.index ?? i,
+        index: i,
       }));
     }
 
-    return response;
+    return res;
   },
 };
 
-// ─────────────────────────────────────────────────────────────
-//  Gemini 适配器
-// ─────────────────────────────────────────────────────────────
-const geminiAdapter = {
+// ── Gemini 适配器 ───────────────────────────────────────────
+const gemini = {
   getEndpoint(model) {
-    const base   = model.endpoint || PROVIDERS.gemini;
-    const version = process.env.GEMINI_VERSION || 'v1beta';
-    const modelId = model.model_id || model.name;
-    return `${base}/models/${modelId}:generateContent?key=${model.api_key}`;
+    const base = model.endpoint || ENDPOINTS.gemini;
+    const id   = model.model_id || model.name;
+    return `${base}/models/${id}:generateContent?key=${model.api_key}`;
   },
 
-  buildRequest(ollamaBody, resolvedModel) {
-    const messages = ollamaBody.messages || [];
-    const options  = ollamaBody.options  || {};
-    const tools    = ollamaBody.tools;
+  buildRequest(body, model) {
+    const { messages = [], options = {}, tools } = body;
 
-    // Gemini 把所有消息合并成一个 contents 结构
-    const parts = messages.map(m => {
-      if (m.role === 'system') return null;
-      const content = typeof m.content === 'string' ? m.content : '';
-      const parts2 = [{ text: content }];
-      if (m.images) {
-        m.images.forEach(img => {
-          parts2.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
-        });
-      }
-      return {
-        role:  m.role === 'model' ? 'model' : 'user',
-        parts: parts2,
-      };
-    }).filter(Boolean);
+    const parts = messages
+      .filter(m => m.role !== 'system')
+      .map(m => {
+        const p = [{ text: typeof m.content === 'string' ? m.content : '' }];
+        if (m.images) {
+          m.images.forEach(img => p.push({ inlineData: { mimeType: 'image/jpeg', data: img } }));
+        }
+        return { role: m.role === 'model' ? 'model' : 'user', parts: p };
+      });
 
     const req = {
       contents: parts,
       generationConfig: {
-        temperature:    ollamaBody.temperature ?? options.temperature ?? 0.7,
-        maxOutputTokens: ollamaBody.max_tokens ?? options.num_predict ?? resolvedModel.default_max_tokens ?? 8192,
+        temperature:     body.temperature ?? options.temperature ?? 0.7,
+        maxOutputTokens: body.max_tokens ?? options.num_predict ?? model.default_max_tokens ?? 8192,
         topP:            options.top_p ?? 0.95,
         topK:            options.top_k ?? 40,
       },
     };
 
-    if (tools && tools.length > 0) {
+    if (tools?.length) {
       req.tools = {
         functionDeclarations: tools.map(t => ({
-          name:        t.function?.name        || t.name        || '',
+          name:        t.function?.name || t.name || '',
           description: t.function?.description || t.description || '',
-          parameters:  t.function?.parameters  || { type: 'object', properties: {} },
+          parameters:  t.function?.parameters || { type: 'object', properties: {} },
         })),
       };
     }
@@ -333,42 +299,42 @@ const geminiAdapter = {
     return req;
   },
 
-  mapResponse(streaming, data, resolvedModel) {
+  mapResponse(streaming, data, model) {
     if (streaming) {
-      // Gemini 流式 — 逐块返回
       return data
         .filter(d => d.candidates?.length > 0)
         .map(d => {
-          const part = d.candidates?.[0]?.content?.parts?.[0];
+          const part = d.candidates[0].content?.parts?.[0];
           const base = {
-            model:     resolvedModel.name,
-            created:   Math.floor(Date.now() / 1000),
-            done:      d.done === true,
+            model:   model.name,
+            created: Math.floor(Date.now() / 1000),
+            done:    d.done === true,
             message: { role: 'assistant', content: part?.text || '' },
           };
           if (part?.functionCall) {
             base.message.tool_calls = [{
               function: {
-                name:       part.functionCall.name || '',
-                arguments:  JSON.stringify(part.functionCall.args || {}),
-              }, index: 0,
+                name:      part.functionCall.name || '',
+                arguments: JSON.stringify(part.functionCall.args || {}),
+              },
+              index: 0,
             }];
             base.message.content = '';
           }
           return 'data: ' + JSON.stringify(base) + '\n\n';
-        })
-        .join('');
+        }).join('');
     }
 
     const candidates = data?.candidates;
-    if (!candidates || candidates.length === 0) {
+    if (!candidates?.length) {
       return {
-        model:      resolvedModel.name,
-        created:    Math.floor(Date.now() / 1000),
-        done:       true,
-        done_reason:'stop',
-        message:    { role: 'assistant', content: data.promptFeedback?.blockReason || 'No response' },
-        total_duration: 0, eval_count: 0,
+        model:        model.name,
+        created:      Math.floor(Date.now() / 1000),
+        done:         true,
+        done_reason:  'stop',
+        message:      { role: 'assistant', content: data.promptFeedback?.blockReason || 'No response' },
+        total_duration: 0,
+        eval_count: 0,
       };
     }
 
@@ -376,8 +342,8 @@ const geminiAdapter = {
     const textPart = parts.find(p => p.text);
     const fcPart   = parts.find(p => p.functionCall);
 
-    const response = {
-      model:        resolvedModel.name,
+    const res = {
+      model:        model.name,
       created:      Math.floor(Date.now() / 1000),
       done:         true,
       done_reason:  candidates[0].finishReason || 'stop',
@@ -386,39 +352,41 @@ const geminiAdapter = {
         content: textPart?.text || '',
       },
       total_duration: 0,
-      eval_count:      candidates[0].tokenCount || 0,
+      eval_count:     candidates[0].tokenCount || 0,
     };
 
     if (fcPart?.functionCall) {
-      response.message.tool_calls = [{
+      res.message.tool_calls = [{
         function: {
-          name:       fcPart.functionCall.name || '',
-          arguments:  JSON.stringify(fcPart.functionCall.args || {}),
-        }, index: 0,
+          name:      fcPart.functionCall.name || '',
+          arguments: JSON.stringify(fcPart.functionCall.args || {}),
+        },
+        index: 0,
       }];
-      response.message.content = '';
+      res.message.content = '';
     }
 
-    return response;
+    return res;
   },
 };
 
-// ─────────────────────────────────────────────────────────────
-//  导出 & 路由
-// ─────────────────────────────────────────────────────────────
-
+// ── 适配器映射 ───────────────────────────────────────────────
 const ADAPTERS = {
-  openai:   openaiAdapter,
-  deepseek: openaiAdapter,
-  groq:     openaiAdapter,
-  silicon:  openaiAdapter,
-  together: openaiAdapter,
-  anthropic: anthropicAdapter,
-  gemini:   geminiAdapter,
+  openai:    openaiLike,
+  deepseek:  openaiLike,
+  groq:      openaiLike,
+  silicon:   openaiLike,
+  together:  openaiLike,
+  anthropic,
+  gemini,
 };
 
 function getAdapter(provider) {
-  return ADAPTERS[provider] || openaiAdapter;
+  const adapter = ADAPTERS[provider] || openaiLike;
+  if (!ADAPTERS[provider]) {
+    logger.warn(`未知 provider "${provider}"，使用 openai 适配器`);
+  }
+  return adapter;
 }
 
-module.exports = { getAdapter, PROVIDERS };
+module.exports = { getAdapter, ENDPOINTS };

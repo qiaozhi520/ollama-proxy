@@ -1,95 +1,77 @@
 'use strict';
 
 const express = require('express');
+const log = require('../utils/logger');
 const registry = require('../models/registry');
 const { getAdapter } = require('../models/adapters/adapters');
+const { stream, request } = require('../utils/net');
+
 const router = express.Router();
+const logger = log.child('chat');
 
-const { forwardRequest } = require('../utils/net');
-
-// ─────────────────────────────────────────────────────────────
-//  POST /api/chat (流式 + 非流式)
-// ─────────────────────────────────────────────────────────────
+// ── POST /api/chat ───────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const body = req.body;
-  const model = body.model;
+  const { model, messages, stream: useStream, tools, options } = req.body;
 
   if (!model) return res.status(400).json({ error: '"model" is required' });
 
-  const resolvedModel = registry.get(model);
-  if (!resolvedModel) {
-    return res.status(404).json({ error: `model "${model}" not found` });
-  }
+  const resolved = registry.get(model);
+  if (!resolved) return res.status(404).json({ error: `model "${model}" not found` });
 
-  const cfg      = registry.resolveConfig(resolvedModel);
-  const adapter  = getAdapter(cfg.provider);
+  const cfg = registry.resolve(resolved);
+  const adapter = getAdapter(cfg.provider);
   const endpoint = adapter.getEndpoint(cfg);
-  const apiBody  = adapter.buildRequest(body, cfg);
+  const apiBody = adapter.buildRequest(req.body, cfg);
+  const streaming = useStream !== false;
 
-  const streaming = body.stream !== false;
-
+  // ── 流式响应 ───────────────────────────────────────────────
   if (streaming) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    flushSSEHeaders(res);
+    res.flushHeaders?.();
 
     try {
-      const stream = await forwardStream(endpoint, cfg.api_key, cfg.provider, apiBody, cfg);
+      const t = log.timer();
+      const upstream = await stream(endpoint, cfg.api_key, cfg.provider, apiBody);
       let buffer = '';
-      let idleTimer;
 
-      stream.on('data', (chunk) => {
+      upstream.on('data', (chunk) => {
         buffer += chunk.toString();
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
-        // Gemini/SSE 分块处理
         const events = [];
         for (const line of lines) {
           if (line.startsWith('data: ')) {
-            try {
-              const raw = JSON.parse(line.slice(6));
-              events.push(raw);
-            } catch {}
+            try { events.push(JSON.parse(line.slice(6))); } catch {}
           } else if (line.startsWith('{')) {
-            try {
-              events.push(JSON.parse(line));
-            } catch {}
+            try { events.push(JSON.parse(line)); } catch {}
           }
         }
 
         if (events.length > 0) {
           const out = adapter.mapResponse(true, events, cfg);
-          if (out) {
-            clearTimeout(idleTimer);
-            res.write(out);
-            flush(res);
-            idleTimer = setTimeout(() => flush(res), 50);
-          }
+          if (out) res.write(out);
         }
       });
 
-      stream.on('end', () => {
-        clearTimeout(idleTimer);
-        // 发送结束帧
-        const done = adapter.mapResponse(false, { done: true, model: cfg.name }, cfg);
-        if (done) {
-          res.write('data: ' + JSON.stringify({
-            model:     cfg.name,
-            created:   Math.floor(Date.now() / 1000),
-            done:      true,
-            done_reason: 'stop',
-            message:   { role: 'assistant', content: '' },
-          }) + '\n\n');
-        }
+      upstream.on('end', () => {
+        logger.debug(`流式完成 (${t.elapsed().toFixed(0)}ms)`);
+        res.write('data: ' + JSON.stringify({
+          model:       cfg.name,
+          created:     Math.floor(Date.now() / 1000),
+          done:        true,
+          done_reason: 'stop',
+          message:     { role: 'assistant', content: '' },
+        }) + '\n\n');
         res.write('data: [DONE]\n\n');
         res.end();
       });
 
-      stream.on('error', (err) => {
-        clearTimeout(idleTimer);
+      upstream.on('error', (err) => {
+        logger.error(`流式错误: ${err.message}`);
         if (!res.headersSent) {
           res.status(502).json({ error: err.message });
         } else {
@@ -98,48 +80,35 @@ router.post('/', async (req, res) => {
         }
       });
     } catch (err) {
-      handleErrorStream(res, err);
+      logger.error(`流式失败: ${err.message}`);
+      if (!res.headersSent) {
+        res.status(502).json({ error: err.message });
+      }
     }
-  } else {
-    try {
-      const data     = await forwardRequest(endpoint, cfg.api_key, cfg.provider, apiBody, false);
-      const response = adapter.mapResponse(false, data, cfg);
-      if (!response) return res.status(502).json({ error: 'invalid upstream response' });
-      res.json(response);
-    } catch (err) {
-      handleError(res, err);
+    return;
+  }
+
+  // ── 非流式响应 ─────────────────────────────────────────────
+  try {
+    const t = log.timer();
+    const data = await request(endpoint, cfg.api_key, cfg.provider, apiBody);
+    const response = adapter.mapResponse(false, data, cfg);
+
+    if (!response) {
+      return res.status(502).json({ error: 'invalid upstream response' });
     }
+
+    logger.debug(`对话完成 (${t.elapsed().toFixed(0)}ms)`);
+    res.json(response);
+  } catch (err) {
+    logger.error(`对话失败: ${err.message}`);
+    res.status(err.status || 502).json({
+      error: {
+        message: err.message || 'Upstream request failed',
+        type:    err.type || 'upstream_error',
+      },
+    });
   }
 });
-
-function flushSSEHeaders(res) {
-  res.flushHeaders ? res.flushHeaders() : res.flush();
-}
-
-function flush(res) {
-  if (res.flush) res.flush();
-}
-
-function handleErrorStream(res, err) {
-  if (!res.headersSent) {
-    res.status(500).json({ error: err.message });
-  } else {
-    res.write('data: ' + JSON.stringify({ error: err.message }) + '\n\n');
-    res.end();
-  }
-}
-
-function handleError(res, err) {
-  console.error('[chat] upstream error:', err.message);
-  const status = err.status || 502;
-  res.status(status).json({
-    error: {
-      message:     err.message || 'Upstream request failed',
-      type:        err.type    || 'upstream_error',
-      code:        err.code    || undefined,
-      status:      status,
-    },
-  });
-}
 
 module.exports = router;

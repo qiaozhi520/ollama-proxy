@@ -1,88 +1,66 @@
 'use strict';
 
 const express = require('express');
+const log = require('../utils/logger');
 const registry = require('../models/registry');
-const { getAdapter } = require('../models/adapters/adapters');
-const { forwardRequest, handleError } = require('../utils/net');
+const { request } = require('../utils/net');
+
 const router = express.Router();
+const logger = log.child('embed');
+
+// Embedding 端点配置
+const EMBED_ENDPOINTS = {
+  openai:  'https://api.openai.com/v1/embeddings',
+  silicon: 'https://api.siliconflow.cn/v1/embeddings',
+  deepseek:'https://api.deepseek.com/v1/embeddings',
+};
 
 // ── POST /api/embeddings ─────────────────────────────────────
-// 生成文本的嵌入向量
 router.post('/', async (req, res) => {
-  const { model, prompt, options } = req.body;
+  const { model, prompt, input } = req.body;
+  const text = prompt || input;
 
   if (!model) return res.status(400).json({ error: '"model" is required' });
-  if (!prompt) return res.status(400).json({ error: '"prompt" is required' });
+  if (!text)  return res.status(400).json({ error: '"prompt" or "input" is required' });
 
-  const resolvedModel = registry.get(model);
-  if (!resolvedModel) {
-    return res.status(404).json({ error: `model "${model}" not found` });
-  }
+  const resolved = registry.get(model);
+  if (!resolved) return res.status(404).json({ error: `model "${model}" not found` });
 
-  const cfg = registry.resolveConfig(resolvedModel);
-  
-  // 检查模型是否支持 embedding
+  const cfg = registry.resolve(resolved);
+
+  // 检查 embedding 能力
   if (cfg.capabilities && !cfg.capabilities.includes('embedding')) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: `model "${model}" does not support embeddings`,
-      hint: 'Use an embedding model like nomic-embed-text, all-minilm, etc.'
+      hint:  'Use an embedding model like text-embedding-3-small, bge-m3, etc.',
     });
   }
 
-  const adapter = getAdapter(cfg.provider);
-  
-  // 构建 embedding 请求
-  let endpoint, apiBody;
-  
-  switch (cfg.provider) {
-    case 'openai': {
-      endpoint = 'https://api.openai.com/v1/embeddings';
-      apiBody = {
-        model: cfg.api_model || cfg.name.split('/').pop(),
-        input: prompt,
-        encoding_format: 'float'
-      };
-      break;
-    }
-    case 'silicon': {
-      endpoint = 'https://api.siliconflow.cn/v1/embeddings';
-      apiBody = {
-        model: cfg.api_model || cfg.name.split('/').pop(),
-        input: prompt,
-        encoding_format: 'float'
-      };
-      break;
-    }
-    case 'deepseek': {
-      endpoint = 'https://api.deepseek.com/v1/embeddings';
-      apiBody = {
-        model: cfg.api_model || 'deepseek-embed',
-        input: prompt
-      };
-      break;
-    }
-    default:
-      return res.status(400).json({ 
-        error: `provider "${cfg.provider}" does not support embeddings via this proxy`
-      });
+  const endpoint = EMBED_ENDPOINTS[cfg.provider];
+  if (!endpoint) {
+    return res.status(400).json({ error: `provider "${cfg.provider}" does not support embeddings` });
   }
+
+  const apiBody = {
+    model: cfg.model_id || cfg.name.split('/').pop(),
+    input: text,
+    encoding_format: 'float',
+  };
 
   try {
-    const data = await forwardRequest(endpoint, cfg.api_key, cfg.provider, apiBody, false);
-    
-    // 转换为 Ollama 格式
+    const t = log.timer();
+    const data = await request(endpoint, cfg.api_key, cfg.provider, apiBody);
     const embedding = data.data?.[0]?.embedding || data.embedding;
+
     if (!embedding) {
-      return res.status(502).json({ error: 'invalid embedding response from upstream' });
+      return res.status(502).json({ error: 'invalid embedding response' });
     }
 
-    res.json({
-      embedding,
-      model,
-      created_at: new Date().toISOString()
-    });
+    logger.debug(`Embedding 完成 (${t.elapsed().toFixed(0)}ms, dim=${embedding.length})`);
+    res.json({ embedding, model, created_at: new Date().toISOString() });
   } catch (err) {
-    handleError(res, err);
+    logger.error(`Embedding 失败: ${err.message}`);
+    res.status(err.status || 502).json({ error: err.message });
   }
 });
 
