@@ -583,7 +583,7 @@ const gemini = {
 const ADAPTERS = {
   openai:    openaiLike,
   deepseek:  openaiLike,
-  minimax:   minimaxAdapter,  // MiniMax 使用专用适配器（支持 Anthropic 格式）
+  minimax:   openaiLike,   // MiniMax 使用 OpenAI 兼容格式
   groq:      openaiLike,
   silicon:   openaiLike,
   together:  openaiLike,
