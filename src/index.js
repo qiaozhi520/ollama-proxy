@@ -11,6 +11,7 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const http    = require('http');
+const { execSync } = require('child_process');
 const log     = require('./utils/logger');
 const registry = require('./models/registry');
 
@@ -191,7 +192,51 @@ app.use((err, _req, res, _next) => {
 });
 
 // ── 启动 ─────────────────────────────────────────────────────
+
+/**
+ * 检查并杀掉占用端口的进程
+ */
+function killPortProcess(port) {
+  try {
+    const result = execSync(`lsof -t -i :${port}`, { encoding: 'utf-8' }).trim();
+    if (result) {
+      const pids = result.split('\n').filter(p => p && p !== process.pid.toString());
+      if (pids.length > 0) {
+        log.child('server').info(`端口 ${port} 被占用，正在杀掉旧进程: ${pids.join(', ')}`);
+        pids.forEach(pid => {
+          try {
+            process.kill(parseInt(pid), 'SIGTERM');
+            log.child('server').info(`已发送 SIGTERM 到进程 ${pid}`);
+          } catch (e) {
+            // 忽略杀进程失败
+          }
+        });
+        // 等待端口释放
+        return new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+  } catch (e) {
+    // lsof 没找到进程，端口空闲
+  }
+  return Promise.resolve();
+}
+
 const server = http.createServer(app);
+
+// 错误处理：端口占用时自动杀掉旧进程
+server.on('error', async (err) => {
+  if (err.code === 'EADDRINUSE') {
+    log.child('server').warn(`端口 ${PORT} 已被占用，尝试杀掉旧进程...`);
+    await killPortProcess(PORT);
+    // 重试启动
+    setTimeout(() => {
+      server.listen(PORT);
+    }, 600);
+  } else {
+    log.child('server').error('服务器错误:', err);
+    process.exit(1);
+  }
+});
 
 server.listen(PORT, () => {
   const logger = log.child('server');

@@ -25,6 +25,11 @@ const LOG_FILE     = process.env.LOG_FILE || 'ollama-proxy.log';
 const LOG_MAX_SIZE = parseInt(process.env.LOG_MAX_SIZE || '10485760', 10); // 10MB
 const LOG_JSON     = process.env.LOG_JSON === 'true'; // 纯 JSON 输出（适合容器环境）
 
+// 请求/响应日志配置
+const LOG_REQUEST_BODY   = process.env.LOG_REQUEST_BODY !== 'false';   // 默认打印请求体
+const LOG_RESPONSE_BODY  = process.env.LOG_RESPONSE_BODY !== 'false';  // 默认打印响应体
+const LOG_BODY_MAX_LEN   = parseInt(process.env.LOG_BODY_MAX_LEN || '2000', 10); // 截断长度
+
 // 颜色码
 const C_RESET  = '\x1b[0m';
 const C_DIM    = '\x1b[2m';
@@ -177,20 +182,67 @@ function requestLogger(req, res, next) {
   const skipPaths = ['/health', '/favicon.ico'];
   if (skipPaths.some(p => req.path === p)) return next();
 
+  // 收集请求体（用于日志）
+  let requestBody = null;
+  if (LOG_REQUEST_BODY && req.body && Object.keys(req.body).length > 0) {
+    requestBody = truncateBody(req.body);
+  }
+
+  // 拦截响应以记录响应体
+  const originalJson = res.json.bind(res);
+  let responseBody = null;
+  
+  res.json = (data) => {
+    if (LOG_RESPONSE_BODY) {
+      responseBody = truncateBody(data);
+    }
+    return originalJson(data);
+  };
+
   res.on('finish', () => {
     const ms = Number(process.hrtime.bigint() - start) / 1e6;
     const status = res.statusCode;
     const level = status >= 500 ? 'error' : status >= 400 ? 'warn' : 'debug';
-    log(level, 'http', `${req.method} ${req.originalUrl} ${status} ${ms.toFixed(1)}ms`, {
+    
+    const logData = {
       requestId,
       method: req.method,
       path: req.originalUrl,
       status,
       duration_ms: Math.round(ms),
-    });
+    };
+
+    // 添加请求体
+    if (requestBody) {
+      logData.request = requestBody;
+    }
+
+    // 添加响应体
+    if (responseBody) {
+      logData.response = responseBody;
+    }
+
+    log(level, 'http', `${req.method} ${req.originalUrl} ${status} ${ms.toFixed(1)}ms`, logData);
   });
 
   next();
+}
+
+// ── 截断请求/响应体 ───────────────────────────────────────────
+function truncateBody(data) {
+  if (!data) return data;
+  
+  let str;
+  try {
+    str = typeof data === 'string' ? data : JSON.stringify(data);
+  } catch {
+    return '[无法序列化]';
+  }
+  
+  if (str.length > LOG_BODY_MAX_LEN) {
+    return str.slice(0, LOG_BODY_MAX_LEN) + `... [截断 ${str.length - LOG_BODY_MAX_LEN} 字符]`;
+  }
+  return data;
 }
 
 // ── 导出 ─────────────────────────────────────────────────────

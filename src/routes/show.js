@@ -54,6 +54,13 @@ function getModelCapabilities(cfg) {
   return capabilities;
 }
 
+// ── 规范化模型名（去掉 :latest 等标签）───────────────────────
+function normalizeModelName(name) {
+  if (!name) return name;
+  // 去掉 :latest 或其他标签
+  return name.split(':')[0];
+}
+
 // ── POST /api/show ───────────────────────────────────────────
 router.post('/', (req, res) => {
   logger.info('show request context %s', JSON.stringify({
@@ -75,18 +82,22 @@ router.post('/', (req, res) => {
   const fallbackModel = registry.list()[0];
 
   // Ollama API 使用 "model" 参数；一些客户端会先发空 body 做能力探测
-  const name = req.body.model || req.body.name || fallbackModel?.name;
+  let name = req.body.model || req.body.name || fallbackModel?.name;
   if (!name) {
     logger.warn(`缺少 model 参数且没有可回退模型，请求体: ${JSON.stringify(req.body)}`);
     return res.status(400).json({ error: '"model" is required', request: req.body });
   }
 
+  // 规范化模型名（去掉 :latest 标签）
+  const normalizedName = normalizeModelName(name);
+  logger.info(`模型名规范化: "${name}" -> "${normalizedName}"`);
+
   if (!req.body.model && !req.body.name) {
     logger.info('show request missing model, falling back to configured model %s', name);
   }
 
-  const model = registry.get(name);
-  if (!model) return res.status(404).json({ error: `model "${name}" not found` });
+  const model = registry.get(normalizedName);
+  if (!model) return res.status(404).json({ error: `model "${normalizedName}" not found` });
 
   const cfg = registry.resolve(model);
   const family = cfg.family || model.provider || 'unknown';
