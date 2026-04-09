@@ -119,6 +119,11 @@ const openaiLike = {
     if (options.presence_penalty)  req.presence_penalty  = options.presence_penalty;
     if (options.stop)     req.stop = Array.isArray(options.stop) ? options.stop : [options.stop];
 
+    // DeepSeek 特有参数 - thinking budget
+    if (model.provider === 'deepseek') {
+      if (body.thinking_budget !== undefined) req.thinking_budget = body.thinking_budget;
+    }
+
     return req;
   },
 
@@ -128,15 +133,25 @@ const openaiLike = {
         if (!chunk.choices?.[0]) return '';
         const c = chunk.choices[0];
         const tc = c.delta?.tool_calls;
+        
+        // 提取 reasoning/thinking 内容
+        const reasoningContent = c.delta?.reasoning_content || c.delta?.thinking || '';
+        
         const base = {
           model:   model.name,
           created: chunk.created || Math.floor(Date.now() / 1000),
-          done:    false,
+          done:    c.finish_reason === 'stop' || c.finish_reason === 'content_filter',
           message: {
             role:    c.delta?.role || 'assistant',
             content: c.delta?.content || (tc ? '' : ''),
           },
         };
+        
+        // 添加 thinking/reasoning 数据（如果存在）
+        if (reasoningContent) {
+          base.thinking = reasoningContent;
+        }
+        
         if (tc) {
           base.message.tool_calls = tc.map((t, i) => ({
             function: {
@@ -158,6 +173,9 @@ const openaiLike = {
 
     const msg = choice.message;
     const tc  = msg?.tool_calls;
+    
+    // 提取 reasoning/thinking 内容
+    const reasoningContent = msg?.reasoning_content || msg?.thinking || '';
 
     const res = {
       model:        model.name,
@@ -171,6 +189,11 @@ const openaiLike = {
       total_duration: 0,
       eval_count:     data.usage?.completion_tokens || 0,
     };
+    
+    // 添加 thinking/reasoning 数据（如果存在）
+    if (reasoningContent) {
+      res.thinking = reasoningContent;
+    }
 
     if (tc) {
       res.message.tool_calls = tc.map((t, i) => ({
