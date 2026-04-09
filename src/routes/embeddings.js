@@ -15,16 +15,40 @@ const EMBED_ENDPOINTS = {
   deepseek:'https://api.deepseek.com/v1/embeddings',
 };
 
+function normalizeEmbeddingInputs(input, prompt) {
+  const value = input ?? prompt;
+  if (value == null || value === '') {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      if (typeof item !== 'string') {
+        throw new Error('OpenAI embeddings array input must contain strings');
+      }
+      return item;
+    });
+  }
+
+  return [String(value)];
+}
+
 // ── POST /api/embeddings ─────────────────────────────────────
 router.post('/', async (req, res) => {
   const { model, prompt, input } = req.body;
-  const text = prompt || input;
+  let texts;
+
+  try {
+    texts = normalizeEmbeddingInputs(input, prompt);
+  } catch (err) {
+    return res.status(400).json({ error: err.message, request: req.body });
+  }
 
   if (!model) {
     logger.warn(`缺少 model 参数，请求体: ${JSON.stringify(req.body)}`);
     return res.status(400).json({ error: '"model" is required', request: req.body });
   }
-  if (!text) {
+  if (texts.length === 0) {
     logger.warn(`缺少 prompt/input 参数，请求体: ${JSON.stringify(req.body)}`);
     return res.status(400).json({ error: '"prompt" or "input" is required', request: req.body });
   }
@@ -47,23 +71,45 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: `provider "${cfg.provider}" does not support embeddings` });
   }
 
-  const apiBody = {
-    model: cfg.model_id || cfg.name.split('/').pop(),
-    input: text,
-    encoding_format: 'float',
-  };
-
   try {
     const t = log.timer();
-    const data = await request(endpoint, cfg.api_key, cfg.provider, apiBody);
-    const embedding = data.data?.[0]?.embedding || data.embedding;
+    const embeddings = [];
 
-    if (!embedding) {
+    for (const text of texts) {
+      const apiBody = {
+        model: cfg.model_id || cfg.name.split('/').pop(),
+        input: text,
+        encoding_format: 'float',
+      };
+
+      const data = await request(endpoint, cfg.api_key, cfg.provider, apiBody);
+      const embedding = data.data?.[0]?.embedding || data.embedding;
+
+      if (!embedding) {
+        return res.status(502).json({ error: 'invalid embedding response' });
+      }
+
+      embeddings.push(embedding);
+    }
+
+    if (embeddings.length === 0) {
       return res.status(502).json({ error: 'invalid embedding response' });
     }
 
-    logger.debug(`Embedding 完成 (${t.elapsed().toFixed(0)}ms, dim=${embedding.length})`);
-    res.json({ embedding, model, created_at: new Date().toISOString() });
+    logger.debug(`Embedding 完成 (${t.elapsed().toFixed(0)}ms, count=${embeddings.length})`);
+    res.json({
+      object: 'list',
+      data: embeddings.map((embedding, index) => ({
+        object: 'embedding',
+        index,
+        embedding,
+      })),
+      model,
+      usage: {
+        prompt_tokens: 0,
+        total_tokens: 0,
+      },
+    });
   } catch (err) {
     logger.error(`Embedding 失败: ${err.message}`);
     res.status(err.status || 502).json({ error: err.message });

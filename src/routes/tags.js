@@ -14,10 +14,10 @@ router.get('/', (_req, res) => {
     model_id:     m.model_id || m.name,
     modified_at:  new Date().toISOString(),
     size:         0,
-    digest:       'sha256:' + '0'.repeat(64),
+    digest:       String(m.digest || m.model_id || m.name || 'unknown'),
     details: {
       parent_model:       '',
-      format:             'chat',
+      format:             'proxy',
       family:             m.provider,
       families:           [m.provider],
       parameter_size:     '',

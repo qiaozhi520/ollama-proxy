@@ -114,7 +114,7 @@ function list() {
       model_id:     m.model_id || m.name,
       modified_at:  new Date().toISOString(),
       size:         cfg.size || 0,
-      digest:       cfg.api_key ? `sha256:${Buffer.from(cfg.api_key).toString('hex').slice(0, 64)}` : 'sha256:' + '0'.repeat(64),
+      digest:       String(cfg.digest || m.model_id || m.name || 'unknown'),
       details: {
         parent_model:       '',
         format:             'proxy',

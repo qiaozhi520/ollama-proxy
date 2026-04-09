@@ -40,11 +40,37 @@ app.set('json spaces', 2);
 if (process.env.CORS_ENABLED !== 'false') {
   app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'HEAD', 'OPTIONS'], allowedHeaders: ['*'] }));
 }
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // 请求日志
 app.use(log.middleware);
+
+// 调试中间件：记录所有 POST/DELETE 请求体
+app.use((req, _res, next) => {
+  if ((req.method === 'POST' || req.method === 'DELETE') && req.body && Object.keys(req.body).length > 0) {
+    const logger = log.child('req');
+    const { messages, system, prompt, tools, ...safeBody } = req.body;
+    // 截断 messages/prompt 避免日志过大，但保留结构
+    let summary = '';
+    if (messages) {
+      summary += `, messages=[${messages.length}条]`;
+    }
+    if (prompt) {
+      summary += `, prompt="${String(prompt).slice(0, 50)}..."`;
+    }
+    if (tools) {
+      summary += `, tools=[${tools.length}个]`;
+    }
+    logger.debug(`${req.method} ${req.path} body=${JSON.stringify(safeBody)}${summary}`);
+  }
+  next();
+});
 
 // ── Ollama API 路由 ─────────────────────────────────────────
 
@@ -112,14 +138,20 @@ app.post('/v1/chat/completions', async (req, res, next) => {
   }
 });
 
-// POST /v1/completions
+// POST /v1/completions (OpenAI 兼容)
 app.post('/v1/completions', (req, res, next) => {
   const { prompt, stream } = req.body;
+  req._openaiFormat = true;
   if (prompt) {
     req.body.messages = [{ role: 'user', content: prompt }];
   }
   req.body.stream = stream !== false;
-  routes.chat(req, res, next);
+  const handler = routes.chat.stack.find(l => l.route?.path === '/');
+  if (handler?.route?.stack?.[0]?.handle) {
+    handler.route.stack[0].handle(req, res, next);
+  } else {
+    next();
+  }
 });
 
 // GET /v1/models
@@ -135,7 +167,6 @@ app.get('/v1/models', (_req, res) => {
 
 // POST /v1/embeddings
 app.post('/v1/embeddings', (req, res, next) => {
-  req.body.prompt = req.body.input;
   const handler = routes.embeddings.stack.find(l => l.route?.path === '/');
   if (handler?.route?.stack?.[0]?.handle) {
     handler.route.stack[0].handle(req, res, next);

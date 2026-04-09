@@ -9,9 +9,73 @@ const { stream, request } = require('../utils/net');
 const router = express.Router();
 const logger = log.child('chat');
 
+function parseSseJsonPayloads(sseText) {
+  return String(sseText)
+    .split(/\n\n+/)
+    .flatMap(block => block.split('\n'))
+    .map(line => line.trim())
+    .filter(line => line.startsWith('data: '))
+    .map(line => line.slice(6).trim())
+    .filter(payload => payload && payload !== '[DONE]')
+    .flatMap(payload => {
+      try {
+        return [JSON.parse(payload)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
+  const message = ollamaChunk.message || {};
+  const delta = {};
+
+  if (message.role && message.role !== 'assistant') {
+    delta.role = message.role;
+  }
+
+  if (typeof message.content === 'string' && message.content) {
+    delta.content = message.content;
+  }
+
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    delta.tool_calls = message.tool_calls.map((toolCall, index) => ({
+      id: toolCall.id || `call_${index}`,
+      type: 'function',
+      index: toolCall.index ?? index,
+      function: {
+        name: toolCall.function?.name || '',
+        arguments: toolCall.function?.arguments || '',
+      },
+    }));
+  }
+
+  if (Object.keys(delta).length === 0 && !ollamaChunk.done) {
+    delta.role = 'assistant';
+  }
+
+  const choice = {
+    index: 0,
+    delta,
+  };
+
+  if (ollamaChunk.done) {
+    choice.finish_reason = ollamaChunk.done_reason || 'stop';
+  }
+
+  return {
+    id: ollamaChunk.id || `chatcmpl-${Date.now().toString(36)}`,
+    object: 'chat.completion.chunk',
+    created: ollamaChunk.created || Math.floor(Date.now() / 1000),
+    model: modelName,
+    choices: [choice],
+  };
+}
+
 // ── POST /api/chat ───────────────────────────────────────────
 router.post('/', async (req, res) => {
   const { model, messages, stream: useStream, tools, options } = req.body;
+  const openaiFormat = Boolean(req._openaiFormat);
 
   if (!model) return res.status(400).json({ error: '"model" is required' });
 
@@ -53,20 +117,33 @@ router.post('/', async (req, res) => {
 
         if (events.length > 0) {
           const out = adapter.mapResponse(true, events, cfg);
-          if (out) res.write(out);
+          if (out) {
+            if (openaiFormat) {
+              for (const payload of parseSseJsonPayloads(out)) {
+                const openaiChunk = convertOllamaChunkToOpenAIChunk(payload, model || cfg.name);
+                res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`);
+              }
+            } else {
+              res.write(out);
+            }
+          }
         }
       });
 
       upstream.on('end', () => {
         logger.debug(`流式完成 (${t.elapsed().toFixed(0)}ms)`);
-        res.write('data: ' + JSON.stringify({
-          model:       cfg.name,
-          created:     Math.floor(Date.now() / 1000),
-          done:        true,
-          done_reason: 'stop',
-          message:     { role: 'assistant', content: '' },
-        }) + '\n\n');
-        res.write('data: [DONE]\n\n');
+        if (openaiFormat) {
+          res.write('data: [DONE]\n\n');
+        } else {
+          res.write('data: ' + JSON.stringify({
+            model:       cfg.name,
+            created:     Math.floor(Date.now() / 1000),
+            done:        true,
+            done_reason: 'stop',
+            message:     { role: 'assistant', content: '' },
+          }) + '\n\n');
+          res.write('data: [DONE]\n\n');
+        }
         res.end();
       });
 
