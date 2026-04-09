@@ -16,6 +16,7 @@ const ENDPOINTS = {
   openai:    'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
   deepseek:  'https://api.deepseek.com/v1',
+  minimax:   'https://api.minimax.chat/v1',
   gemini:    'https://generativelanguage.googleapis.com/v1beta',
   groq:      'https://api.groq.com/openai/v1',
   silicon:   'https://api.siliconflow.cn/v1',
@@ -374,6 +375,7 @@ const gemini = {
 const ADAPTERS = {
   openai:    openaiLike,
   deepseek:  openaiLike,
+  minimax:   openaiLike,
   groq:      openaiLike,
   silicon:   openaiLike,
   together:  openaiLike,

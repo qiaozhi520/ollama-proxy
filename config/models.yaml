@@ -101,28 +101,95 @@ models:
 
   # ── DeepSeek 系列 ────────────────────────────────────────
 
-  - name: "deepseek/deepseek-chat-v3-250312"
+  - name: "deepseek/deepseek-chat"
     display_name: "DeepSeek V3"
     provider: "deepseek"
     endpoint: ""           # 默认 https://api.deepseek.com/v1
     api_key: "${DEEPSEEK_API_KEY}"
-    model_id: "deepseek-chat-v3-250312"
-    context_length: 64000
+    model_id: "deepseek-chat"
+    context_length: 65536
     supports_tools: true
     supports_vision: false
     supports_streaming: true
     default_max_tokens: 8192
     enabled: true
 
-  - name: "deepseek/deepseek-coder-v2-250312"
-    display_name: "DeepSeek Coder V2"
+  - name: "deepseek/deepseek-reasoner"
+    display_name: "DeepSeek R1"
     provider: "deepseek"
     endpoint: ""
     api_key: "${DEEPSEEK_API_KEY}"
-    model_id: "deepseek-coder-v2-250312"
-    context_length: 64000
-    supports_tools: true
+    model_id: "deepseek-reasoner"
+    context_length: 65536
+    supports_tools: false
     supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "deepseek/deepseek-coder"
+    display_name: "DeepSeek Coder"
+    provider: "deepseek"
+    endpoint: ""
+    api_key: "${DEEPSEEK_API_KEY}"
+    model_id: "deepseek-coder"
+    context_length: 65536
+    supports_tools: false
+    supports_vision: false
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  # ── MiniMax 系列 ─────────────────────────────────────────
+
+  - name: "minimax/minimax-m2.7"
+    display_name: "MiniMax M2.7"
+    provider: "minimax"
+    endpoint: ""           # 默认 https://api.minimax.chat/v1
+    api_key: "${MINIMAX_API_KEY}"
+    model_id: "MiniMax-M2.7"
+    context_length: 204800
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "minimax/minimax-m2.7-highspeed"
+    display_name: "MiniMax M2.7 Highspeed"
+    provider: "minimax"
+    endpoint: ""
+    api_key: "${MINIMAX_API_KEY}"
+    model_id: "MiniMax-M2.7-highspeed"
+    context_length: 204800
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "minimax/minimax-m2.5"
+    display_name: "MiniMax M2.5"
+    provider: "minimax"
+    endpoint: ""
+    api_key: "${MINIMAX_API_KEY}"
+    model_id: "MiniMax-M2.5"
+    context_length: 204800
+    supports_tools: true
+    supports_vision: true
+    supports_streaming: true
+    default_max_tokens: 8192
+    enabled: true
+
+  - name: "minimax/minimax-m2.5-highspeed"
+    display_name: "MiniMax M2.5 Highspeed"
+    provider: "minimax"
+    endpoint: ""
+    api_key: "${MINIMAX_API_KEY}"
+    model_id: "MiniMax-M2.5-highspeed"
+    context_length: 204800
+    supports_tools: true
+    supports_vision: true
     supports_streaming: true
     default_max_tokens: 8192
     enabled: true
