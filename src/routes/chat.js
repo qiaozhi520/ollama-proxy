@@ -26,25 +26,52 @@ function parseSseJsonPayloads(sseText) {
     });
 }
 
+function stripThinkingMarkup(text) {
+  const source = typeof text === 'string' ? text : '';
+  const thinkingParts = [];
+
+  const content = source
+    .replace(/<think(?:ing)?[^>]*>([\s\S]*?)<\/think(?:ing)?>/gi, (_match, thinkingBlock) => {
+      if (thinkingBlock) {
+        thinkingParts.push(String(thinkingBlock).trim());
+      }
+      return '';
+    })
+    .trim();
+
+  const thinking = thinkingParts.join('\n').trim();
+
+  return {
+    content,
+    thinking: thinking || undefined,
+  };
+}
+
+function extractThinkingContent(message = {}, chunk = {}) {
+  const explicitThinking = message.thinking || message.thinking_content || chunk.thinking;
+  const contentResult = stripThinkingMarkup(message.content);
+
+  return {
+    content: contentResult.content,
+    thinking: explicitThinking || contentResult.thinking,
+  };
+}
+
 function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
   const message = ollamaChunk.message || {};
   const delta = {};
+  const { content, thinking } = extractThinkingContent(message, ollamaChunk);
 
   if (message.role && message.role !== 'assistant') {
     delta.role = message.role;
   }
 
-  if (typeof message.content === 'string' && message.content) {
-    delta.content = message.content;
+  if (content) {
+    delta.content = content;
   }
 
-  // 处理 thinking/thinking_content 字段（DeepSeek 等模型）
-  // 直接从 chunk 中获取 thinking 数据，而不是从 message 中
-  const thinkingContent = message.thinking || message.thinking_content || ollamaChunk.thinking;
-  if (thinkingContent) {
-    // 在 content 前面添加 thinking 标记（Claude 风格）
-    const thinkingPrefix = `<thinking>\n${thinkingContent}\n</thinking>\n`;
-    delta.content = thinkingPrefix + (delta.content || '');
+  if (thinking) {
+    delta.thinking = thinking;
   }
 
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
@@ -108,7 +135,8 @@ function emitThinkingChunk(ollamaChunk, modelName, res, openaiFormat) {
         index: 0,
         delta: {
           role: 'assistant',
-          content: `<thinking>\n${thinkingContent}\n</thinking>\n`,
+          content: '',
+          thinking: thinkingContent,
         },
       }],
     };
@@ -127,17 +155,14 @@ function emitThinkingChunk(ollamaChunk, modelName, res, openaiFormat) {
 }
 
 function convertOllamaMessageToOpenAIMessage(message = {}) {
+  const { content, thinking } = extractThinkingContent(message);
   const openaiMessage = {
     role: message.role || 'assistant',
-    content: typeof message.content === 'string' ? message.content : '',
+    content,
   };
 
-  // 处理 thinking/thinking_content 字段
-  const thinkingContent = message.thinking || message.thinking_content;
-  if (thinkingContent) {
-    // 在 content 前面添加 thinking 标记
-    const thinkingPrefix = `<thinking>\n${thinkingContent}\n</thinking>\n`;
-    openaiMessage.content = thinkingPrefix + openaiMessage.content;
+  if (thinking) {
+    openaiMessage.thinking = thinking;
   }
 
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
@@ -315,3 +340,8 @@ router.post('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.normalizeModelName = normalizeModelName;
+module.exports.stripThinkingMarkup = stripThinkingMarkup;
+module.exports.extractThinkingContent = extractThinkingContent;
+module.exports.convertOllamaChunkToOpenAIChunk = convertOllamaChunkToOpenAIChunk;
+module.exports.convertOllamaMessageToOpenAIMessage = convertOllamaMessageToOpenAIMessage;

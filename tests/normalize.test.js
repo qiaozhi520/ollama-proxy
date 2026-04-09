@@ -1,19 +1,10 @@
-// 测试模型名规范化逻辑
-function normalizeModelName(name) {
-  if (!name) return name;
-  return name.split(':')[0];
-}
+const chatRoute = require('../src/routes/chat');
 
-// 测试 thinking 内容转换逻辑
-function convertThinkingToContent(message) {
-  const content = typeof message.content === 'string' ? message.content : '';
-  const thinkingContent = message.thinking || message.thinking_content;
-  if (thinkingContent) {
-    const thinkingPrefix = `<thinking>\n${thinkingContent}\n</thinking>\n`;
-    return thinkingPrefix + content;
-  }
-  return content;
-}
+const {
+  normalizeModelName,
+  stripThinkingMarkup,
+  convertOllamaMessageToOpenAIMessage,
+} = chatRoute;
 
 describe('normalizeModelName', () => {
   test('should remove :latest tag', () => {
@@ -40,35 +31,32 @@ describe('normalizeModelName', () => {
   });
 });
 
-describe('convertThinkingToContent', () => {
-  test('should add thinking tag before content', () => {
-    const result = convertThinkingToContent({
+describe('thinking markup handling', () => {
+  test('should strip wrapped think blocks from content', () => {
+    const result = stripThinkingMarkup('<think> I am thinking... </think>Hello');
+
+    expect(result.content).toBe('Hello');
+    expect(result.thinking).toBe('I am thinking...');
+  });
+
+  test('should keep thinking separate from visible content', () => {
+    const result = convertOllamaMessageToOpenAIMessage({
       content: 'Hello',
       thinking: 'I am thinking...'
     });
-    expect(result).toBe('<thinking>\nI am thinking...\n</thinking>\nHello');
+
+    expect(result.content).toBe('Hello');
+    expect(result.thinking).toBe('I am thinking...');
+    expect(result.content).not.toContain('<thinking>');
+    expect(result.content).not.toContain('<think>');
   });
-  
-  test('should handle thinking_content field', () => {
-    const result = convertThinkingToContent({
-      content: 'Hello',
-      thinking_content: 'I am thinking...'
+
+  test('should remove embedded think tags from content when no explicit thinking field exists', () => {
+    const result = convertOllamaMessageToOpenAIMessage({
+      content: '<thinking> I am thinking... </thinking>Hello'
     });
-    expect(result).toBe('<thinking>\nI am thinking...\n</thinking>\nHello');
-  });
-  
-  test('should handle no thinking', () => {
-    const result = convertThinkingToContent({
-      content: 'Hello'
-    });
-    expect(result).toBe('Hello');
-  });
-  
-  test('should handle empty thinking', () => {
-    const result = convertThinkingToContent({
-      content: 'Hello',
-      thinking: ''
-    });
-    expect(result).toBe('Hello');
+
+    expect(result.content).toBe('Hello');
+    expect(result.thinking).toBe('I am thinking...');
   });
 });
