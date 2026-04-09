@@ -20,8 +20,14 @@ router.post('/', async (req, res) => {
   const { model, prompt, input } = req.body;
   const text = prompt || input;
 
-  if (!model) return res.status(400).json({ error: '"model" is required' });
-  if (!text)  return res.status(400).json({ error: '"prompt" or "input" is required' });
+  if (!model) {
+    logger.warn(`缺少 model 参数，请求体: ${JSON.stringify(req.body)}`);
+    return res.status(400).json({ error: '"model" is required', request: req.body });
+  }
+  if (!text) {
+    logger.warn(`缺少 prompt/input 参数，请求体: ${JSON.stringify(req.body)}`);
+    return res.status(400).json({ error: '"prompt" or "input" is required', request: req.body });
+  }
 
   const resolved = registry.get(model);
   if (!resolved) return res.status(404).json({ error: `model "${model}" not found` });

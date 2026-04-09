@@ -13,7 +13,10 @@ router.delete('/', (req, res) => {
   const { name, model } = req.body;
   const modelName = name || model;  // 支持 name 或 model 参数
 
-  if (!modelName) return res.status(400).json({ error: '"name" is required' });
+  if (!modelName) {
+    logger.warn(`缺少 model 参数，请求体: ${JSON.stringify(req.body)}`);
+    return res.status(400).json({ error: '"model" is required', request: req.body });
+  }
 
   const customModels = createRoute.getCustomModels();
 

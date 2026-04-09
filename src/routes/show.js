@@ -1,15 +1,20 @@
 'use strict';
 
 const express = require('express');
+const log = require('../utils/logger');
 const registry = require('../models/registry');
 
 const router = express.Router();
+const logger = log.child('show');
 
 // ── POST /api/show ───────────────────────────────────────────
 router.post('/', (req, res) => {
   // Ollama API 使用 "model" 参数
   const name = req.body.model || req.body.name;
-  if (!name) return res.status(400).json({ error: '"model" is required' });
+  if (!name) {
+    logger.warn(`缺少 model 参数，请求体: ${JSON.stringify(req.body)}`);
+    return res.status(400).json({ error: '"model" is required', request: req.body });
+  }
 
   const model = registry.get(name);
   if (!model) return res.status(404).json({ error: `model "${name}" not found` });

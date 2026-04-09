@@ -16,7 +16,10 @@ router.post('/', async (req, res) => {
   const name = req.body.model || req.body.name;
   const { from, modelfile, stream } = req.body;
 
-  if (!name) return res.status(400).json({ error: '"model" is required' });
+  if (!name) {
+    logger.warn(`缺少 model 参数，请求体: ${JSON.stringify(req.body)}`);
+    return res.status(400).json({ error: '"model" is required', request: req.body });
+  }
 
   // 从 Modelfile 创建
   if (modelfile) {
