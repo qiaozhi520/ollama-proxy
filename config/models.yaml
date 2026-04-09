@@ -100,14 +100,16 @@ models:
     enabled: true
 
   # ── DeepSeek 系列 ────────────────────────────────────────
+  # 官方文档: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+  # deepseek-chat 和 deepseek-reasoner 均为 DeepSeek-V3.2 (128K 上下文)
 
   - name: "deepseek/deepseek-chat"
-    display_name: "DeepSeek V3"
+    display_name: "DeepSeek V3.2"
     provider: "deepseek"
-    endpoint: ""           # 默认 https://api.deepseek.com/v1
+    endpoint: ""           # 默认 https://api.deepseek.com
     api_key: "${DEEPSEEK_API_KEY}"
     model_id: "deepseek-chat"
-    context_length: 65536
+    context_length: 131072
     supports_tools: true
     supports_vision: false
     supports_streaming: true
@@ -120,21 +122,8 @@ models:
     endpoint: ""
     api_key: "${DEEPSEEK_API_KEY}"
     model_id: "deepseek-reasoner"
-    context_length: 65536
-    supports_tools: false
-    supports_vision: false
-    supports_streaming: true
-    default_max_tokens: 8192
-    enabled: true
-
-  - name: "deepseek/deepseek-coder"
-    display_name: "DeepSeek Coder"
-    provider: "deepseek"
-    endpoint: ""
-    api_key: "${DEEPSEEK_API_KEY}"
-    model_id: "deepseek-coder"
-    context_length: 65536
-    supports_tools: false
+    context_length: 131072
+    supports_tools: false   # R1 当前不支持 Function Calling
     supports_vision: false
     supports_streaming: true
     default_max_tokens: 8192
