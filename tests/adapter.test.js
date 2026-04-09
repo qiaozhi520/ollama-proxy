@@ -147,13 +147,91 @@ describe('Adapters', () => {
     });
   });
 
-  describe('MiniMax adapter (via openai-like)', () => {
+  describe('MiniMax adapter (via minimaxAdapter)', () => {
     const adapter = getAdapter('minimax');
 
-    test('should get correct endpoint', () => {
+    test('should get correct Anthropic format endpoint', () => {
       const model = { provider: 'minimax' };
       const endpoint = adapter.getEndpoint(model);
       expect(endpoint).toContain('minimax');
+      expect(endpoint).toContain('anthropic');
+    });
+
+    test('should build Anthropic format request', () => {
+      const body = {
+        model: 'MiniMax-M2.5',
+        messages: [
+          { role: 'user', content: 'Hello' }
+        ],
+        stream: true,
+      };
+      const model = { model_id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', provider: 'minimax' };
+
+      const req = adapter.buildRequest(body, model);
+      expect(req.model).toBe('MiniMax-M2.5');
+      expect(req.stream).toBe(true);
+      // MiniMax 使用 Anthropic 格式
+      expect(req.max_tokens).toBeDefined();
+    });
+
+    test('should map streaming response with thinking blocks', () => {
+      const chunks = [
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'thinking', thinking: 'Let me think...' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'thinking', thinking: 'First step...' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'thinking', thinking: 'Second step...' },
+        },
+        {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'text' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'text_delta', text: 'Final answer.' },
+        },
+      ];
+      const model = { name: 'MiniMax-M2.5' };
+
+      const result = adapter.mapResponse(true, chunks, model);
+      
+      // 应该包含 thinking 和 content
+      expect(result).toContain('thinking');
+      expect(result).toContain('content');
+    });
+
+    test('should map non-streaming response with thinking', () => {
+      const data = {
+        id: 'msg_123',
+        model: 'MiniMax-M2.5',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'My thinking process...' },
+          { type: 'text', text: 'Final answer' },
+        ],
+        stop_reason: 'end_turn',
+        usage: {
+          input_tokens: 10,
+          output_tokens: 20,
+        },
+      };
+      const model = { name: 'MiniMax-M2.5' };
+
+      const result = adapter.mapResponse(false, data, model);
+      
+      expect(result.thinking).toBe('My thinking process...');
+      expect(result.message.content).toBe('Final answer');
     });
   });
 });

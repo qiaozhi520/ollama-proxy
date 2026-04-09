@@ -211,6 +211,146 @@ const openaiLike = {
   },
 };
 
+// ── MiniMax 适配器（M2.5 等使用 Anthropic API 格式支持深度思考）─────────
+const minimaxAdapter = {
+  getEndpoint(model) {
+    // MiniMax M2.5+ 使用 Anthropic 格式端点
+    const base = model.endpoint || 'https://api.minimax.chat';
+    const groupId = model.group_id || process.env.MINIMAX_GROUP_ID;
+    let endpoint = `${base}/anthropic`;
+    if (groupId) {
+      endpoint += `?GroupId=${groupId}`;
+    }
+    return endpoint;
+  },
+
+  buildRequest(body, model) {
+    const { messages = [], options = {}, tools } = body;
+
+    const systemMsg = messages.find(m => m.role === 'system');
+    const chatMsgs  = messages.filter(m => m.role !== 'system');
+
+    // MiniMax M2.5+ 使用 Anthropic 格式
+    const req = {
+      model:      model.model_id || model.name || 'MiniMax-M2.5',
+      messages:   chatMsgs.map(m => ({
+        role:    m.role === 'assistant' ? 'assistant' : 'user',
+        content: typeof m.content === 'string' ? m.content : '',
+      })),
+      stream:     body.stream !== false,
+      max_tokens: body.max_tokens || options.num_predict || model.default_max_tokens || 8192,
+    };
+
+    if (systemMsg) {
+      req.system = systemMsg.content;
+    }
+
+    if (body.temperature !== undefined || options.temperature !== undefined) {
+      req.temperature = body.temperature ?? options.temperature;
+    }
+    if (options.top_p) req.top_p = options.top_p;
+
+    if (tools?.length) {
+      req.tools = tools.map(t => ({
+        name:         t.function?.name || t.name || '',
+        description:  t.function?.description || t.description || '',
+        input_schema: t.function?.parameters || { type: 'object', properties: {} },
+      }));
+    }
+
+    return req;
+  },
+
+  mapResponse(streaming, data, model) {
+    if (streaming) {
+      // MiniMax Anthropic 格式的流式响应
+      return data
+        .filter(d => ['content_block_start', 'content_block_delta', 'message_delta', 'message_stop'].includes(d.type))
+        .map(d => {
+          // 处理 thinking 内容块
+          if (d.type === 'content_block_start' && d.content_block?.type === 'thinking') {
+            return 'data: ' + JSON.stringify({
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    false,
+              thinking: '', // 开始 thinking 块
+            }) + '\n\n';
+          }
+          
+          // 处理 thinking delta
+          if (d.type === 'content_block_delta' && d.delta?.type === 'thinking') {
+            return 'data: ' + JSON.stringify({
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    false,
+              thinking: d.delta.thinking || '',
+            }) + '\n\n';
+          }
+          
+          // 处理 text 内容
+          if (d.type === 'content_block_start' && d.content_block?.type === 'text') {
+            return 'data: ' + JSON.stringify({
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    false,
+              message: { role: 'assistant', content: '' },
+            }) + '\n\n';
+          }
+          
+          if (d.type === 'content_block_delta' && d.delta?.type === 'text_delta') {
+            return 'data: ' + JSON.stringify({
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    false,
+              message: {
+                role:    'assistant',
+                content: d.delta.text || '',
+              },
+            }) + '\n\n';
+          }
+          
+          // 处理最终消息
+          if (d.type === 'message_delta') {
+            return 'data: ' + JSON.stringify({
+              model:   model.name,
+              created: Math.floor(Date.now() / 1000),
+              done:    true,
+              done_reason: d.delta?.stop_reason || 'end_turn',
+              message: { role: 'assistant', content: '' },
+            }) + '\n\n';
+          }
+          
+          return '';
+        }).join('');
+    }
+
+    // 非流式响应
+    const content = Array.isArray(data.content) ? data.content : [];
+    const textBlock  = content.find(c => c.type === 'text');
+    const thinkingBlock = content.find(c => c.type === 'thinking');
+
+    const res = {
+      model:        model.name,
+      created:      Math.floor(Date.now() / 1000),
+      done:         true,
+      done_reason:  data.stop_reason || 'end_turn',
+      message: {
+        role:    'assistant',
+        content: textBlock?.text || '',
+      },
+      total_duration: 0,
+      eval_count:     data.usage?.output_tokens || 0,
+    };
+
+    // 添加 thinking 内容（如果存在）
+    if (thinkingBlock?.thinking) {
+      res.thinking = thinkingBlock.thinking;
+    }
+
+    return res;
+  },
+};
+
 // ── Anthropic 适配器 ─────────────────────────────────────────
 const anthropic = {
   getEndpoint(model) {
@@ -443,7 +583,7 @@ const gemini = {
 const ADAPTERS = {
   openai:    openaiLike,
   deepseek:  openaiLike,
-  minimax:   openaiLike,
+  minimax:   minimaxAdapter,  // MiniMax 使用专用适配器（支持 Anthropic 格式）
   groq:      openaiLike,
   silicon:   openaiLike,
   together:  openaiLike,
