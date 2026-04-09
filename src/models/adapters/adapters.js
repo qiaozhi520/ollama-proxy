@@ -26,11 +26,56 @@ const ENDPOINTS = {
 // ── 工具函数 ─────────────────────────────────────────────────
 
 function mapMessages(messages = []) {
-  return messages.map(m => ({
-    role:    m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : m.role,
-    content: typeof m.content === 'string' ? m.content : '',
-    ...(m.images ? { images: m.images } : {}),
-  }));
+  const normalized = [];
+  let pendingToolCallIds = [];
+
+  for (const message of messages) {
+    const role = message.role === 'assistant'
+      ? 'assistant'
+      : message.role === 'user'
+        ? 'user'
+        : message.role;
+
+    const mapped = {
+      role,
+      content: typeof message.content === 'string' ? message.content : '',
+    };
+
+    if (message.images) {
+      mapped.images = message.images;
+    }
+
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      mapped.tool_calls = message.tool_calls.map((toolCall, index) => {
+        const id = toolCall.id || `call_${index}`;
+        return {
+          id,
+          type: toolCall.type || 'function',
+          function: {
+            name: toolCall.function?.name || '',
+            arguments: toolCall.function?.arguments || '',
+          },
+        };
+      });
+      pendingToolCallIds = mapped.tool_calls.map(toolCall => toolCall.id).filter(Boolean);
+    } else if (role === 'assistant') {
+      pendingToolCallIds = [];
+    }
+
+    if (role === 'tool') {
+      const toolCallId = message.tool_call_id || message.toolCallId || pendingToolCallIds.shift();
+      if (toolCallId) {
+        mapped.tool_call_id = toolCallId;
+      }
+      if (message.name) {
+        mapped.name = message.name;
+      }
+    }
+
+    normalized.push(mapped);
+  }
+
+  return normalized;
 }
 
 function mapTools(tools) {

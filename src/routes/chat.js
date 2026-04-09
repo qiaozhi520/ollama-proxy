@@ -72,6 +72,26 @@ function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
   };
 }
 
+function convertOllamaMessageToOpenAIMessage(message = {}) {
+  const openaiMessage = {
+    role: message.role || 'assistant',
+    content: typeof message.content === 'string' ? message.content : '',
+  };
+
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    openaiMessage.tool_calls = message.tool_calls.map((toolCall, index) => ({
+      id: toolCall.id || `call_${index}`,
+      type: toolCall.type || 'function',
+      function: {
+        name: toolCall.function?.name || '',
+        arguments: toolCall.function?.arguments || '',
+      },
+    }));
+  }
+
+  return openaiMessage;
+}
+
 // ── 规范化模型名（去掉 :latest 等标签）───────────────────────
 function normalizeModelName(name) {
   if (!name) return name;
@@ -201,7 +221,7 @@ router.post('/', async (req, res) => {
         model:   model,
         choices: [{
           index:         0,
-          message:       ollamaResponse.message || { role: 'assistant', content: '' },
+          message:       convertOllamaMessageToOpenAIMessage(ollamaResponse.message || { role: 'assistant', content: '' }),
           finish_reason: 'stop',
         }],
         usage: {
