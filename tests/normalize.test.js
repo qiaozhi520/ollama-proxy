@@ -4,6 +4,7 @@ const {
   normalizeModelName,
   stripThinkingMarkup,
   convertOllamaMessageToOpenAIMessage,
+  sanitizeOllamaResponse,
 } = chatRoute;
 
 describe('normalizeModelName', () => {
@@ -58,5 +59,18 @@ describe('thinking markup handling', () => {
 
     expect(result.content).toBe('Hello');
     expect(result.thinking).toBe('I am thinking...');
+  });
+
+  test('should sanitize ollama responses before sending to clients', () => {
+    const response = sanitizeOllamaResponse({
+      model: 'test-model',
+      message: {
+        role: 'assistant',
+        content: '<think> I am thinking... </think>Hello',
+      },
+    });
+
+    expect(response.message.content).toBe('Hello');
+    expect(response.thinking).toBe('I am thinking...');
   });
 });

@@ -5,6 +5,7 @@ const log = require('../utils/logger');
 const registry = require('../models/registry');
 const { getAdapter } = require('../models/adapters/adapters');
 const { stream, request } = require('../utils/net');
+const { extractThinkingContent } = require('../utils/thinking');
 
 const router = express.Router();
 const logger = log.child('generate');
@@ -28,13 +29,14 @@ function parseSseJsonPayloads(sseText) {
 
 function convertOllamaChatChunkToGenerateChunk(ollamaChunk, modelName) {
   const message = ollamaChunk.message || {};
+  const { content, thinking } = extractThinkingContent(message, ollamaChunk);
   return {
     model: modelName,
     created_at: new Date((ollamaChunk.created || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
-    response: message.content || ollamaChunk.response || '',
+    response: content || ollamaChunk.response || '',
     done: Boolean(ollamaChunk.done),
     done_reason: ollamaChunk.done_reason || 'stop',
-    ...(ollamaChunk.thinking ? { thinking: ollamaChunk.thinking } : {}),
+    ...(thinking ? { thinking } : {}),
   };
 }
 
@@ -172,7 +174,7 @@ router.post('/', async (req, res) => {
     const response = {
       model:      model,
       created_at: new Date().toISOString(),
-      response:   chatResponse.message?.content || '',
+      response:   extractThinkingContent(chatResponse.message || {}, chatResponse).content || '',
       done:       true,
       done_reason: 'stop',
       context:    [],

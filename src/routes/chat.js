@@ -5,6 +5,7 @@ const log = require('../utils/logger');
 const registry = require('../models/registry');
 const { getAdapter } = require('../models/adapters/adapters');
 const { stream, request } = require('../utils/net');
+const { stripThinkingMarkup, extractThinkingContent } = require('../utils/thinking');
 
 const router = express.Router();
 const logger = log.child('chat');
@@ -24,37 +25,6 @@ function parseSseJsonPayloads(sseText) {
         return [];
       }
     });
-}
-
-function stripThinkingMarkup(text) {
-  const source = typeof text === 'string' ? text : '';
-  const thinkingParts = [];
-
-  const content = source
-    .replace(/<think(?:ing)?[^>]*>([\s\S]*?)<\/think(?:ing)?>/gi, (_match, thinkingBlock) => {
-      if (thinkingBlock) {
-        thinkingParts.push(String(thinkingBlock).trim());
-      }
-      return '';
-    })
-    .trim();
-
-  const thinking = thinkingParts.join('\n').trim();
-
-  return {
-    content,
-    thinking: thinking || undefined,
-  };
-}
-
-function extractThinkingContent(message = {}, chunk = {}) {
-  const explicitThinking = message.thinking || message.thinking_content || chunk.thinking;
-  const contentResult = stripThinkingMarkup(message.content);
-
-  return {
-    content: contentResult.content,
-    thinking: explicitThinking || contentResult.thinking,
-  };
 }
 
 function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
@@ -179,6 +149,26 @@ function convertOllamaMessageToOpenAIMessage(message = {}) {
   return openaiMessage;
 }
 
+function sanitizeOllamaResponse(response) {
+  if (!response) return response;
+
+  const sanitized = { ...response };
+  if (response.message) {
+    const { content, thinking } = extractThinkingContent(response.message, response);
+    sanitized.message = {
+      ...response.message,
+      content,
+    };
+    if (thinking) {
+      sanitized.thinking = thinking;
+    } else if ('thinking' in sanitized) {
+      delete sanitized.thinking;
+    }
+  }
+
+  return sanitized;
+}
+
 // ── 规范化模型名（去掉 :latest 等标签）───────────────────────
 function normalizeModelName(name) {
   if (!name) return name;
@@ -251,7 +241,10 @@ router.post('/', async (req, res) => {
                 res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`);
               }
             } else {
-              res.write(out);
+              for (const payload of parseSseJsonPayloads(out)) {
+                const sanitizedChunk = sanitizeOllamaResponse(payload);
+                res.write(`data: ${JSON.stringify(sanitizedChunk)}\n\n`);
+              }
             }
           }
         }
@@ -304,6 +297,8 @@ router.post('/', async (req, res) => {
       return res.status(502).json({ error: 'invalid upstream response' });
     }
 
+    const sanitizedResponse = sanitizeOllamaResponse(ollamaResponse);
+
     logger.debug(`对话完成 (${t.elapsed().toFixed(0)}ms)`);
 
     // 如果请求来自 /v1/chat/completions，返回 OpenAI 格式
@@ -315,7 +310,7 @@ router.post('/', async (req, res) => {
         model:   model,
         choices: [{
           index:         0,
-          message:       convertOllamaMessageToOpenAIMessage(ollamaResponse.message || { role: 'assistant', content: '' }),
+          message:       convertOllamaMessageToOpenAIMessage(sanitizedResponse.message || { role: 'assistant', content: '' }),
           finish_reason: 'stop',
         }],
         usage: {
@@ -327,7 +322,7 @@ router.post('/', async (req, res) => {
       return res.json(openaiResponse);
     }
 
-    res.json(ollamaResponse);
+    res.json(sanitizedResponse);
   } catch (err) {
     logger.error(`对话失败: ${err.message}`);
     res.status(err.status || 502).json({
@@ -345,3 +340,4 @@ module.exports.stripThinkingMarkup = stripThinkingMarkup;
 module.exports.extractThinkingContent = extractThinkingContent;
 module.exports.convertOllamaChunkToOpenAIChunk = convertOllamaChunkToOpenAIChunk;
 module.exports.convertOllamaMessageToOpenAIMessage = convertOllamaMessageToOpenAIMessage;
+module.exports.sanitizeOllamaResponse = sanitizeOllamaResponse;
