@@ -60,13 +60,25 @@ function buildGenerateMessages(body) {
   return messages;
 }
 
+// ── 规范化模型名（去掉 :latest 等标签）───────────────────────
+function normalizeModelName(name) {
+  if (!name) return name;
+  return name.split(':')[0];
+}
+
 // ── POST /api/generate ───────────────────────────────────────
 router.post('/', async (req, res) => {
   const { model, stream: useStream, options, tools } = req.body;
 
   if (!model) return res.status(400).json({ error: '"model" is required' });
 
-  const resolved = registry.get(model);
+  // 规范化模型名
+  const normalizedName = normalizeModelName(model);
+  if (normalizedName !== model) {
+    logger.debug(`模型名规范化: "${model}" -> "${normalizedName}"`);
+  }
+
+  const resolved = registry.get(normalizedName);
   if (!resolved) return res.status(404).json({ error: `model "${model}" not found` });
 
   const cfg = registry.resolve(resolved);

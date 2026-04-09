@@ -53,8 +53,14 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: '"prompt" or "input" is required', request: req.body });
   }
 
-  const resolved = registry.get(model);
-  if (!resolved) return res.status(404).json({ error: `model "${model}" not found` });
+  // 规范化模型名
+  const normalizedName = model.split(':')[0];
+  if (normalizedName !== model) {
+    logger.debug(`模型名规范化: "${model}" -> "${normalizedName}"`);
+  }
+
+  const resolved = registry.get(normalizedName);
+  if (!resolved) return res.status(404).json({ error: `model "${normalizedName}" not found` });
 
   const cfg = registry.resolve(resolved);
 
