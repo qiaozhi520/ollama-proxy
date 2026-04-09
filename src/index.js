@@ -134,9 +134,14 @@ app.get('/v1/models', (_req, res) => {
 });
 
 // POST /v1/embeddings
-app.post('/v1/embeddings', (req, res) => {
+app.post('/v1/embeddings', (req, res, next) => {
   req.body.prompt = req.body.input;
-  routes.embeddings(req, res);
+  const handler = routes.embeddings.stack.find(l => l.route?.path === '/');
+  if (handler?.route?.stack?.[0]?.handle) {
+    handler.route.stack[0].handle(req, res, next);
+  } else {
+    next();
+  }
 });
 
 // ── 健康检查 ─────────────────────────────────────────────────
