@@ -12,9 +12,11 @@ const customModels = new Map();
 
 // ── POST /api/create ─────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, from, modelfile, stream } = req.body;
+  // Ollama API: model 参数，兼容 name
+  const name = req.body.model || req.body.name;
+  const { from, modelfile, stream } = req.body;
 
-  if (!name) return res.status(400).json({ error: '"name" is required' });
+  if (!name) return res.status(400).json({ error: '"model" is required' });
 
   // 从 Modelfile 创建
   if (modelfile) {

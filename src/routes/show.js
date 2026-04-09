@@ -7,8 +7,9 @@ const router = express.Router();
 
 // ── POST /api/show ───────────────────────────────────────────
 router.post('/', (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: '"name" is required' });
+  // Ollama API 使用 "model" 参数
+  const name = req.body.model || req.body.name;
+  if (!name) return res.status(400).json({ error: '"model" is required' });
 
   const model = registry.get(name);
   if (!model) return res.status(404).json({ error: `model "${name}" not found` });
