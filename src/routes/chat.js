@@ -146,6 +146,8 @@ router.post('/', async (req, res) => {
       upstream.on('end', () => {
         logger.debug(`流式完成 (${t.elapsed().toFixed(0)}ms)`);
         if (openaiFormat) {
+          const finalChunk = convertOllamaChunkToOpenAIChunk({ done: true, done_reason: 'stop' }, model || cfg.name);
+          res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
           res.write('data: [DONE]\n\n');
         } else {
           res.write('data: ' + JSON.stringify({
