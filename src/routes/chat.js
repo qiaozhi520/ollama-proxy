@@ -38,6 +38,15 @@ function convertOllamaChunkToOpenAIChunk(ollamaChunk, modelName) {
     delta.content = message.content;
   }
 
+  // 处理 thinking/thinking_content 字段（DeepSeek 等模型）
+  // OpenAI 兼容格式：将 thinking 放入 content 的特殊标记中
+  const thinkingContent = message.thinking || message.thinking_content || ollamaChunk.thinking;
+  if (thinkingContent) {
+    // 在 content 前面添加 thinking 标记（Claude 风格）
+    const thinkingPrefix = `<thinking>\n${thinkingContent}\n</thinking>\n`;
+    delta.content = thinkingPrefix + (delta.content || '');
+  }
+
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
     delta.tool_calls = message.tool_calls.map((toolCall, index) => ({
       id: toolCall.id || `call_${index}`,
@@ -77,6 +86,14 @@ function convertOllamaMessageToOpenAIMessage(message = {}) {
     role: message.role || 'assistant',
     content: typeof message.content === 'string' ? message.content : '',
   };
+
+  // 处理 thinking/thinking_content 字段
+  const thinkingContent = message.thinking || message.thinking_content;
+  if (thinkingContent) {
+    // 在 content 前面添加 thinking 标记
+    const thinkingPrefix = `<thinking>\n${thinkingContent}\n</thinking>\n`;
+    openaiMessage.content = thinkingPrefix + openaiMessage.content;
+  }
 
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
     openaiMessage.tool_calls = message.tool_calls.map((toolCall, index) => ({
