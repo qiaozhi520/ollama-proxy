@@ -92,14 +92,36 @@ router.post('/', async (req, res) => {
   try {
     const t = log.timer();
     const data = await request(endpoint, cfg.api_key, cfg.provider, apiBody);
-    const response = adapter.mapResponse(false, data, cfg);
+    const ollamaResponse = adapter.mapResponse(false, data, cfg);
 
-    if (!response) {
+    if (!ollamaResponse) {
       return res.status(502).json({ error: 'invalid upstream response' });
     }
 
     logger.debug(`对话完成 (${t.elapsed().toFixed(0)}ms)`);
-    res.json(response);
+
+    // 如果请求来自 /v1/chat/completions，返回 OpenAI 格式
+    if (req._openaiFormat) {
+      const openaiResponse = {
+        id:      `chatcmpl-${Date.now().toString(36)}`,
+        object:  'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model:   model,
+        choices: [{
+          index:         0,
+          message:       ollamaResponse.message || { role: 'assistant', content: '' },
+          finish_reason: 'stop',
+        }],
+        usage: {
+          prompt_tokens:     data.usage?.prompt_tokens || 0,
+          completion_tokens: data.usage?.completion_tokens || 0,
+          total_tokens:      data.usage?.total_tokens || 0,
+        },
+      };
+      return res.json(openaiResponse);
+    }
+
+    res.json(ollamaResponse);
   } catch (err) {
     logger.error(`对话失败: ${err.message}`);
     res.status(err.status || 502).json({

@@ -100,7 +100,10 @@ app.use('/api/blobs', routes.blobs);
 // ── OpenAI 兼容路由 ─────────────────────────────────────────
 
 // POST /v1/chat/completions
-app.post('/v1/chat/completions', (req, res, next) => {
+app.post('/v1/chat/completions', async (req, res, next) => {
+  // 设置标记，要求返回 OpenAI 格式
+  req._openaiFormat = true;
+  
   const handler = routes.chat.stack.find(l => l.route?.path === '/');
   if (handler?.route?.stack?.[0]?.handle) {
     handler.route.stack[0].handle(req, res, next);

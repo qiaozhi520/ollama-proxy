@@ -35,11 +35,25 @@ router.post('/', async (req, res) => {
   try {
     const t = log.timer();
     const data = await request(endpoint, cfg.api_key, cfg.provider, apiBody);
-    const response = adapter.mapResponse(false, data, cfg);
+    const chatResponse = adapter.mapResponse(false, data, cfg);
 
-    if (!response) {
+    if (!chatResponse) {
       return res.status(502).json({ error: 'invalid upstream response' });
     }
+
+    // 转换为 Ollama /api/generate 格式
+    const response = {
+      model:      model,
+      created_at: new Date().toISOString(),
+      response:   chatResponse.message?.content || '',
+      done:       true,
+      done_reason: 'stop',
+      context:    [],
+      total_duration: 0,
+      load_duration:  0,
+      prompt_eval_count: 0,
+      eval_count: chatResponse.eval_count || 0,
+    };
 
     logger.debug(`生成完成 (${t.elapsed().toFixed(0)}ms)`);
     res.json(response);
